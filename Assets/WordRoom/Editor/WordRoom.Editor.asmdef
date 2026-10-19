@@ -4,7 +4,8 @@
     "references": [
         "WordRoom.Data",
         "WordRoom.Data.Validation",
-        "WordRoom.Unity"
+        "WordRoom.Unity",
+        "WordRoom.RoomDebug"
     ],
     "includePlatforms": [
         "Editor"
