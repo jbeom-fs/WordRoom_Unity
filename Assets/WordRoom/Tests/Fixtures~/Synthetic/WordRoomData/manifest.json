@@ -1,0 +1,204 @@
+{
+  "format": "WordRoomDataPackage",
+  "schemaVersion": 1,
+  "packageId": "0c8142f158883a4c5972fabca14134095aff88645f7deb5ebd28a844aa3dc6a2",
+  "createdAt": "2026-10-19T15:33:23",
+  "exporter": {
+    "name": "Tools/DataExport/export_unity_data.py",
+    "version": "1.0.0",
+    "python": "3.14.4",
+    "numpy": "2.5.4"
+  },
+  "identity": {
+    "sourceKind": "synthetic",
+    "appVersion": "1.1.0",
+    "vocabularyName": "fixture_v1",
+    "vocabularyCreatedAt": "2026-10-19T00:00:00",
+    "senseOrderSha256": "340c2cd8051048317105459bbcebed030a49f96116fe5722fcb68be47f06c4b5",
+    "filterVersion": "fixture-filter-v1",
+    "vocabularyLimit": 12,
+    "minLength": 1,
+    "maxLength": 8,
+    "excludeJeok": true,
+    "dictionarySourceName": "fixture_dictionary.zip",
+    "dictionarySourceBytes": 1234,
+    "dictionarySourceMtimeNs": "1",
+    "dictionaryCreatedAt": "2026-10-19T00:00:00",
+    "dictionarySchema": 1,
+    "embeddingModel": "fixture/e5@0",
+    "embeddingInput": "fixture",
+    "fasttextVersion": "fixture-ft-1",
+    "fasttextModel": "fixture fastText",
+    "fasttextModelSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "judgeModel": "fixture/judge@0",
+    "judgePromptSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "judgePromptVersion": "fixture-prompt",
+    "relationVersion": "82d1dfa0d1fde2c19a20ec8735e21ad162895759ef50c73e1c4b04fb7ac63e0f",
+    "relationRule": "either-order-yes-v1",
+    "relationSnapshotId": "82d1dfa0d1fd:either-order-yes-v1:28:28",
+    "relationContentSha256": "31eb6386f6993dad8f8588473f2754f9770f735e4a69c79d84e94a4f81ee58b4",
+    "restrictedListVersion": "fixture-restrict-1",
+    "settingsSha256": "183adea8c12803fc5d56297e32e643e7c57435c1954d7b61ef894520b1f33804",
+    "effectiveSettingsSha256": "056ee14c94f9fe3b58e12279e761790b6f0002f94d1e4b603a60b10a6c44030d",
+    "sourceFiles": [
+      {
+        "name": "vocab/ready.json",
+        "bytes": 913,
+        "sha256": "46e2ddfce939f47d05f5f82fb3d9e44e8f619515451ba5fe6d2034c730495451"
+      },
+      {
+        "name": "vocab/selected_senses.json",
+        "bytes": 4952,
+        "sha256": "7c46c961d0d861b2372172f515411df6dd562468f7de84afd18cc46897a3dedf"
+      },
+      {
+        "name": "vocab/vectors.npy",
+        "bytes": 1152,
+        "sha256": "efbfafa09673df190a30ff6adf453d218c04389dd3960d97711b877a91f43fc6"
+      },
+      {
+        "name": "vocab/fasttext.npy",
+        "bytes": 512,
+        "sha256": "2131441dd260f892e0debe6ec3a3e7b6075e855daeb7b5870223f192ba0d908c"
+      },
+      {
+        "name": "vocab/fasttext.json",
+        "bytes": 276,
+        "sha256": "cbd43ed6a48a8064b105eea88bb5b942044e9ce07dbb57c117b553925c69c096"
+      },
+      {
+        "name": "vocab/verified.json",
+        "bytes": 18,
+        "sha256": "8f45c17110e6a071410878dfe7fd6c85e65b40311e1c3162853072127b3b1ccf"
+      },
+      {
+        "name": "settings.json",
+        "bytes": 226,
+        "sha256": "183adea8c12803fc5d56297e32e643e7c57435c1954d7b61ef894520b1f33804"
+      },
+      {
+        "name": "models/manifest.json",
+        "bytes": 75,
+        "sha256": "fdf9739811b5a50a3e2f32bcc57ae57d339e0ecd470ec649209fe16a74b9221c"
+      },
+      {
+        "name": "models/judge_manifest.json",
+        "bytes": 72,
+        "sha256": "59084f76f2c8db0e9d970b4e992dccf606f7be87609b6066f6cbbbae60b09766"
+      },
+      {
+        "name": "configs/fasttext_restricted.json",
+        "bytes": 712,
+        "sha256": "20aad8b34ff84e6a430c0b63717f26e2ea5c90427f0740da02758ab54cc3a392"
+      }
+    ]
+  },
+  "counts": {
+    "words": 12,
+    "senses": 16,
+    "e5Dimensions": 16,
+    "fasttextDimensions": 8,
+    "fasttextValidWords": 11,
+    "relationRecords": 25,
+    "restrictedEntries": 3,
+    "restrictedInVocabulary": 2,
+    "preparedSourceRows": 3
+  },
+  "files": [
+    {
+      "name": "words.json",
+      "role": "words",
+      "bytes": 401,
+      "sha256": "2d536b56e1d6b0a666b3ddf4d6eb6cf1c5816990b228c9412a88f7de0d365d54",
+      "records": 12,
+      "contentType": "json"
+    },
+    {
+      "name": "senses.json",
+      "role": "senses",
+      "bytes": 2222,
+      "sha256": "550693597be51ae2bf8931b3b132924295b1fbeb3b24752290b90410c72357f6",
+      "records": 16,
+      "contentType": "json"
+    },
+    {
+      "name": "e5_sense_vectors.bin",
+      "role": "e5_sense_vectors",
+      "bytes": 1088,
+      "sha256": "b3044ea6567db413367ba799ff17192023167c4b8d902572b5b6566a3ff147e7",
+      "records": 16,
+      "contentType": "binary",
+      "rows": 16,
+      "cols": 16,
+      "dtype": "float32",
+      "byteOrder": "little",
+      "layout": "row-major (C order)",
+      "rowKey": "sense row = senses.json index",
+      "headerBytes": 64,
+      "elementBytes": 4,
+      "payloadSha256": "3fbc6de2a57f596e76b48a4aca2cda980a92724adfb8c76c929b63f5077a2e1f"
+    },
+    {
+      "name": "fasttext_word_vectors.bin",
+      "role": "fasttext_word_vectors",
+      "bytes": 448,
+      "sha256": "23e7cc64b873c00caea33c6476d2796feb4fb63a61bdfdefd561b6402846caa0",
+      "records": 12,
+      "contentType": "binary",
+      "rows": 12,
+      "cols": 8,
+      "dtype": "float32",
+      "byteOrder": "little",
+      "layout": "row-major (C order)",
+      "rowKey": "word rank = words.json index",
+      "headerBytes": 64,
+      "elementBytes": 4,
+      "payloadSha256": "3522a048196954e49161be884bff7a3a047a7b1293859bfe6adc112c2769512d"
+    },
+    {
+      "name": "relations.bin",
+      "role": "relation_records",
+      "bytes": 1664,
+      "sha256": "f3d78e4d262fb9aef7e0e19dbd74441e32cbb4e47d551869462ba2fefbaae0be",
+      "records": 25,
+      "contentType": "binary",
+      "rows": 25,
+      "cols": 64,
+      "dtype": "relation-record-v1",
+      "byteOrder": "little",
+      "layout": "row-major records sorted by (min sense row, max sense row)",
+      "rowKey": "relation record",
+      "headerBytes": 64,
+      "elementBytes": 64,
+      "payloadSha256": "4bd974a7f3bfe49b2870086a32715c6a41f5a07201a34e237efb4530708454d0"
+    },
+    {
+      "name": "relations.json",
+      "role": "relation_metadata",
+      "bytes": 2954,
+      "sha256": "79a55da78a81b61cc3c9a7c79adceeae1d9e6b8280c1b50ab6b591ea4fcd1a76",
+      "records": 25,
+      "contentType": "json"
+    },
+    {
+      "name": "restricted.json",
+      "role": "fasttext_restricted",
+      "bytes": 1109,
+      "sha256": "a7a6892a7b4a9469865181236f2c462b9cb542b90bc30bc5d9205fd1ba5a3237",
+      "records": 3,
+      "contentType": "json"
+    },
+    {
+      "name": "settings.json",
+      "role": "effective_settings",
+      "bytes": 6629,
+      "sha256": "9826642d0d3dee318f040ea0a7cf36c78e983e1bd4543f2d68df30da6fae1343",
+      "records": 46,
+      "contentType": "json"
+    }
+  ],
+  "notes": [
+    "원본 데이터는 읽기만 했습니다. 벡터·점수는 반올림·양자화·재계산 없이 원본 정밀도로 저장했습니다.",
+    "바이너리 파일: 64바이트 헤더(형식 식별자·스키마·행·열·숫자 형식·바이트 순서·배치·행 키·패키지 ID 앞 16바이트) 뒤에 본문."
+  ]
+}

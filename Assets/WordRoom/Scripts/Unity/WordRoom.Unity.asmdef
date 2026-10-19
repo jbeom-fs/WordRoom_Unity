@@ -1,0 +1,17 @@
+{
+    "name": "WordRoom.Unity",
+    "rootNamespace": "WordRoom.UnityLayer",
+    "references": [
+        "WordRoom.Data",
+        "WordRoom.Data.Validation"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

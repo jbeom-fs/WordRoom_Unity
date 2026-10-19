@@ -1,0 +1,16 @@
+{
+    "name": "WordRoom.Data.Validation",
+    "rootNamespace": "WordRoom.Data.Validation",
+    "references": [
+        "WordRoom.Data"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

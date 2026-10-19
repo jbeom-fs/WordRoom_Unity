@@ -108,3 +108,10 @@ InitTestScene*.unity*
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# WordRoom data port (generated; rebuild with Tools/DataExport/export_unity_data.py)
+/[Aa]ssets/StreamingAssets/WordRoomData/
+/[Aa]ssets/StreamingAssets/WordRoomData.meta
+/DataPackages/
+/DataValidation/
+__pycache__/

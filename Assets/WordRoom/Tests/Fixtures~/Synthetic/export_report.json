@@ -1,0 +1,220 @@
+{
+  "packageId": "0c8142f158883a4c5972fabca14134095aff88645f7deb5ebd28a844aa3dc6a2",
+  "createdAt": "2026-10-19T15:33:23",
+  "sourceKind": "synthetic",
+  "counts": {
+    "words": 12,
+    "senses": 16,
+    "e5Dimensions": 16,
+    "fasttextDimensions": 8,
+    "fasttextValidWords": 11,
+    "relationRecords": 25,
+    "restrictedEntries": 3,
+    "restrictedInVocabulary": 2,
+    "preparedSourceRows": 3
+  },
+  "vocabularyStats": {
+    "words": 12,
+    "senses": 16,
+    "e5_dim": 16,
+    "fasttext_dim": 8,
+    "fasttext_valid": 11,
+    "e5_norm_min": 1.0,
+    "e5_norm_max": 1.0000001192092896,
+    "fasttext_norm_min": 0.9999998807907104,
+    "fasttext_norm_max": 1.0,
+    "ready_words": 12,
+    "ready_senses": 16
+  },
+  "relations": {
+    "stored_rows_all_versions": 28,
+    "current_version_rows": 27,
+    "compatible": 25,
+    "excluded_outside_vocabulary": 1,
+    "excluded_signature_mismatch": 1,
+    "other_version_rows": 1,
+    "legacy_judgments_table_rows": 0,
+    "by_status": {
+      "judged": 23,
+      "partial": 1,
+      "invalid": 1
+    },
+    "valid_yes": 9,
+    "decide_mismatches": 0,
+    "prepared_rows": 3,
+    "prepared_excluded": 1
+  },
+  "relationMismatchExamples": [],
+  "unknownPayloadKeys": {},
+  "files": [
+    {
+      "name": "words.json",
+      "bytes": 401,
+      "sha256": "2d536b56e1d6b0a666b3ddf4d6eb6cf1c5816990b228c9412a88f7de0d365d54",
+      "records": 12
+    },
+    {
+      "name": "senses.json",
+      "bytes": 2222,
+      "sha256": "550693597be51ae2bf8931b3b132924295b1fbeb3b24752290b90410c72357f6",
+      "records": 16
+    },
+    {
+      "name": "e5_sense_vectors.bin",
+      "bytes": 1088,
+      "sha256": "b3044ea6567db413367ba799ff17192023167c4b8d902572b5b6566a3ff147e7",
+      "records": 16
+    },
+    {
+      "name": "fasttext_word_vectors.bin",
+      "bytes": 448,
+      "sha256": "23e7cc64b873c00caea33c6476d2796feb4fb63a61bdfdefd561b6402846caa0",
+      "records": 12
+    },
+    {
+      "name": "relations.bin",
+      "bytes": 1664,
+      "sha256": "f3d78e4d262fb9aef7e0e19dbd74441e32cbb4e47d551869462ba2fefbaae0be",
+      "records": 25
+    },
+    {
+      "name": "relations.json",
+      "bytes": 2954,
+      "sha256": "79a55da78a81b61cc3c9a7c79adceeae1d9e6b8280c1b50ab6b591ea4fcd1a76",
+      "records": 25
+    },
+    {
+      "name": "restricted.json",
+      "bytes": 1109,
+      "sha256": "a7a6892a7b4a9469865181236f2c462b9cb542b90bc30bc5d9205fd1ba5a3237",
+      "records": 3
+    },
+    {
+      "name": "settings.json",
+      "bytes": 6629,
+      "sha256": "9826642d0d3dee318f040ea0a7cf36c78e983e1bd4543f2d68df30da6fae1343",
+      "records": 46
+    }
+  ],
+  "totalBytes": 23538,
+  "settings": {
+    "changed": [
+      {
+        "key": "min_word_length",
+        "type": "int",
+        "valueJson": "1",
+        "rawJson": "2",
+        "rawPresent": true,
+        "change": "changed"
+      }
+    ],
+    "defaulted": [
+      "neighbor_weight",
+      "start_depth",
+      "depth_basis",
+      "min_similarity",
+      "conflict_mode",
+      "similarity_floor",
+      "relaxation_step",
+      "selection_top",
+      "temperature",
+      "recent_window",
+      "avoid_adjacent_repeat",
+      "repeat_scope",
+      "repeat_radius",
+      "vocabulary_mode",
+      "nouns_only",
+      "policy",
+      "exploitation",
+      "revisit_penalty",
+      "max_moves",
+      "runs",
+      "seed",
+      "exclude_jeok_derivatives",
+      "relation_step",
+      "relation_floor",
+      "placement_budget",
+      "fasttext_supplement",
+      "fasttext_preferred_min",
+      "fasttext_restricted",
+      "target_guidance",
+      "guidance_strength",
+      "guidance_start",
+      "guidance_ramp",
+      "guidance_max",
+      "guidance_basis",
+      "player_revision",
+      "preparation_top_k",
+      "preparation_depth",
+      "preparation_max_pairs",
+      "preparation_max_minutes"
+    ],
+    "dropped": [
+      {
+        "key": "search_budget",
+        "rawJson": "128",
+        "reason": "폐기된 설정(무시)"
+      },
+      {
+        "key": "unknown_key",
+        "rawJson": "1",
+        "reason": "알 수 없는 설정(무시)"
+      }
+    ],
+    "notices": [
+      "search_budget(방당 검사 한도)는 폐기되었습니다. 실험 중 관계 검사를 하지 않으므로 무시합니다.",
+      "candidate_count는 의미 기반 생성에 사용하지 않습니다. DB 준비 후보 수는 preparation_top_k입니다.",
+      "0.5.0 이전 설정의 최소 글자 수 2(당시 기본값)를 새 기본값 1로 바꿨습니다. 2글자 이상만 쓰려면 다시 2로 저장하세요.",
+      "이 설정에는 목표 유도 항목이 없어 1.0.0 기본값(유도 켬, 점진 강화, 플레이어 판 2)을 적용합니다. 0.9.0과 같게 실행하려면 target_guidance=false, player_revision=1로 저장하세요.",
+      "알 수 없는 설정 unknown_key를 무시합니다."
+    ],
+    "migrationSteps": [],
+    "guiRoundTripNotes": []
+  },
+  "thresholds": [
+    "0.8",
+    "0.7",
+    "0.6",
+    "0.5",
+    "0.4",
+    "0.3",
+    "0.2",
+    "0.1"
+  ],
+  "verification": {
+    "files": 8,
+    "relations": 25
+  },
+  "timingsSeconds": {
+    "snapshot": 0.03044239990413189,
+    "build": 0.04081850033253431,
+    "verify": 0.015269899740815163,
+    "reference": 0.04561410006135702,
+    "activate": 0.0022238995879888535,
+    "total": 0.13561240024864674
+  },
+  "referenceSummary": {
+    "wordStatePairs": 64,
+    "evidence": 26,
+    "rejectedPairs": 1,
+    "categories": {
+      "multi_combo_one_approved": 3,
+      "approved_with_no": 2,
+      "approved_with_unchecked": 1,
+      "all_no": 1,
+      "unchecked_remaining": 2,
+      "below_threshold_yes": 3,
+      "error_or_partial": 2
+    },
+    "approvedWordPairs": [
+      5,
+      6,
+      7,
+      8,
+      8,
+      8,
+      8,
+      8
+    ]
+  }
+}
