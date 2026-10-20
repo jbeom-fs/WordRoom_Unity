@@ -116,7 +116,7 @@ namespace WordRoom.Generation
             {
                 case "running": return "탐색 중";
                 case "success": return "목표 도달";
-                case "move_limit": return "이동 한도 도달";
+                case "move_limit": return "테스트 이동 제한 도달";
                 case "no_exit": return "생성된 인접 방이 없어 이동 불가";
                 default: return status;
             }

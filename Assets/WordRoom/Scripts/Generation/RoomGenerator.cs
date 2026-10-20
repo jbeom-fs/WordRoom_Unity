@@ -138,7 +138,7 @@ namespace WordRoom.Generation
                 var from = Map.Position;
                 var fresh = Map.Enter(dest);
                 if (word == Map.Target) Map.Status = "success";
-                else if (Map.Moves >= cfg.MaxMoves) Map.Status = "move_limit";
+                else if (cfg.UseMoveLimit && Map.Moves >= cfg.MaxMoves) Map.Status = "move_limit";   // test-only; normal play has no limit
                 var update = new GenerationUpdate { Kind = "move", From = from, To = dest, Moved = true, FirstVisit = fresh };
                 update.Fill = Fill(dest);       // also for the target room (1.1.0: arrival is kept, neighbors filled anyway)
                 Finish(update);

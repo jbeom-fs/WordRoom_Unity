@@ -44,6 +44,12 @@ namespace WordRoom.RoomDebug
         [SerializeField] double guidanceMax = 0.03;
         [SerializeField] GuidanceBasisOption guidanceBasis = GuidanceBasisOption.고유방문방수;
 
+        [Header("테스트 전용 이동 제한 (기본 꺼짐: 일반 플레이는 제한 없음)")]
+        [Tooltip("켜면 누적 이동이 최대 이동 횟수에 도달한 이동을 마친 뒤 '테스트 이동 제한 도달'로 끝납니다. 같은 이동에서 목표에 도착하면 목표 도달이 우선. 끄면 이동 횟수로는 끝나지 않습니다(이동 횟수 기록은 계속).")]
+        [SerializeField] bool useMoveLimit;
+        [Tooltip("테스트 이동 제한을 켰을 때만 사용(1 이상). 제한이 꺼져 있으면 이 값은 사용되지 않습니다.")]
+        [SerializeField] int maxMoves = 300;
+
         [Header("로그")]
         [Tooltip("생성 시간·관계 기준·보충 근거·실패 사유 등을 추가로 출력")]
         [SerializeField] bool verboseLog;
@@ -100,7 +106,9 @@ namespace WordRoom.RoomDebug
             c.GuidanceRamp = guidanceRamp;
             c.GuidanceMax = guidanceMax;
             c.GuidanceBasis = guidanceBasis == GuidanceBasisOption.누적이동 ? "moves" : "unique";
-            c.Source = "데이터 패키지 settings.json(Python load_config 적용값) + Inspector(시드·어휘 범위·목표 유도)";
+            c.UseMoveLimit = useMoveLimit;
+            c.MaxMoves = maxMoves;
+            c.Source = "데이터 패키지 settings.json(Python load_config 적용값) + Inspector(시드·어휘 범위·목표 유도·테스트 이동 제한)";
             return c;
         }
 

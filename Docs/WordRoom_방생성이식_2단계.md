@@ -41,7 +41,7 @@ Python 1.1.0 `kw_semantic_engine.Simulation`의 방 단어 생성과 이동을 U
 | `ft_sims`, `ft_candidates`, `ft_links`, `plan_fasttext` | `FtSims`, `FtCandidates`, `FtLinks`, `PlanFasttext` | |
 | `fill` | `Fill` | 같은 지도 상태(방 수)에서 실패한 방은 다시 시도하지 않음 |
 | `reserve` | `RoomGenerator.Start` | 주변이 하나도 없으면 `no_exit` |
-| `step(destination)` | `RoomGenerator.Move(direction)` | 도착은 진입 즉시 확정, 목표 방 주변도 채움, `max_moves` 도달 시 종료 |
+| `step(destination)` | `RoomGenerator.Move(direction)` | 도착은 진입 즉시 확정, 목표 방 주변도 채움. 이동 횟수 종료는 테스트 전용(`UseMoveLimit` 켬 + `MaxMoves` 도달)이며 일반 플레이는 제한 없음 |
 | `choose`, `choose_v2`, 플레이어 `random.Random` | 이식 안 함 | 자동 플레이어는 범위 밖 |
 | `check_target`, `result()`, 결과 JSON·통계 | 이식 안 함 | 기록 전용. 생성 결과에는 영향 없음 |
 
@@ -66,9 +66,11 @@ Python 1.1.0 `kw_semantic_engine.Simulation`의 방 단어 생성과 이동을 U
 
 ## 5. 설정과 값 출처
 
-Inspector(실험 시작 시 복사): 시작 단어, 목표 단어, 시드(42), 어휘 범위(15000, 1~8글자), 목표 유도(켬, 초기 0, 시작 10, 폭 40, 최대 0.03, 고유 방문 방 수), 상세 로그, 데이터 준비되면 자동 시작. 시작·목표 기본값 `커피`·`우유`는 README 예시 단어일 뿐입니다.
+Inspector(실험 시작 시 복사): 시작 단어, 목표 단어, 시드(42), 어휘 범위(15000, 1~8글자), 목표 유도(켬, 초기 0, 시작 10, 폭 40, 최대 0.03, 고유 방문 방 수), 테스트 전용 이동 제한(`Use Move Limit` 끔, `Max Moves` 300), 상세 로그, 데이터 준비되면 자동 시작.
 
-나머지(`GenerationConfig.FromSettings`, 출처: 데이터 패키지 `settings.json` = Python 1.1.0 `load_config` 적용값): 중복 금지(켬, 주변 3칸, 맨해튼 거리), `selection_top` 4, 온도 0.08, `recent_window` 64, 다양성 0.6, `neighbor_weight` 0.5, 관계 기준 0.8/폭 0.1/최저 0.1, 배치 탐색 한도 2000, fastText 보충 켬, 선호 하한 0.2, 최대 이동 300. 제한 표기는 패키지 `restricted.json`(Python `configs/fasttext_restricted.json`, `ft-restrict-v2`).
+이동 횟수 제한: 일반 플레이는 제한이 없습니다. 테스트에서 `Use Move Limit`를 켠 경우에만, 누적 이동이 `Max Moves`(1 이상)에 도달한 이동을 마친 뒤(주변 채우기 포함) `테스트 이동 제한 도달`(`move_limit`)로 끝납니다. 같은 이동에서 목표에 들어가면 목표 도착이 우선합니다. 제한이 꺼져 있으면 `Max Moves` 값은 쓰지 않고 검사도 하지 않습니다. 누적 이동 수는 제한 여부와 관계없이 기록됩니다(상세 로그의 `이동 N`). 패키지 `settings.json`의 `max_moves`(300)는 `MaxMoves` 값만 채우고 제한을 켜지 않습니다. 실험 설정 로그는 `이동 제한 없음` 또는 `테스트 이동 제한: N회`로 표시합니다. 시작·목표 기본값 `커피`·`우유`는 README 예시 단어일 뿐입니다.
+
+나머지(`GenerationConfig.FromSettings`, 출처: 데이터 패키지 `settings.json` = Python 1.1.0 `load_config` 적용값): 중복 금지(켬, 주변 3칸, 맨해튼 거리), `selection_top` 4, 온도 0.08, `recent_window` 64, 다양성 0.6, `neighbor_weight` 0.5, 관계 기준 0.8/폭 0.1/최저 0.1, 배치 탐색 한도 2000, fastText 보충 켬, 선호 하한 0.2. (`max_moves` 300도 읽지만 Inspector의 `Max Moves`로 덮어쓰며, 테스트 이동 제한을 켰을 때만 사용.) 제한 표기는 패키지 `restricted.json`(Python `configs/fasttext_restricted.json`, `ft-restrict-v2`).
 
 ## 6. 사용자 확인 절차
 
@@ -86,6 +88,11 @@ Inspector(실험 시작 시 복사): 시작 단어, 목표 단어, 시드(42), �
 | 미생성 이동 | 미생성 방향 키 | `미생성이라 이동할 수 없습니다 — 사유`, 좌표 그대로 |
 | 재현성 | 같은 설정·시드로 Play 두 번, 같은 키 순서 | 출력이 같음. 시드를 바꾸면 달라질 수 있음 |
 | 목표 도착 | 목표 단어가 보이는 방향으로 이동 | 출력 끝에 `목표 도착`, 이후 방향키 무시(`실험이 끝나 이동하지 않습니다`) |
+| 이동 제한 없음(기본) | `Use Move Limit` 끔, 300회 넘게 이동 | 설정 로그에 `이동 제한 없음`. 목표 도착 전까지 계속 이동, 상세 로그 `이동 N`은 계속 증가 |
+| 테스트 이동 제한 | `Use Move Limit` 켬, `Max Moves` 3, 새 실험 | 설정 로그에 `테스트 이동 제한: 3회`. 세 번째 유효 이동 결과(주변 생성 포함) 출력 뒤 `실험 종료: 테스트 이동 제한 도달`, 이후 방향키 무시 |
+| 제한·도착 동시 | 제한 N회째 이동으로 목표에 들어가기 | `목표 도착`(제한 종료 아님) |
+| 미생성 이동과 횟수 | 미생성 방향 키 | 이동 횟수 증가 없음(제한 횟수에도 포함 안 됨) |
+| 설정 고정 | 실행 중 `Use Move Limit`·`Max Moves` 변경 | 진행 중 실험에는 적용 안 됨. 컴포넌트 메뉴 `새 실험 시작` 후 적용 |
 | 입력 차단 | 로딩 중·생성 중(특히 목표 근접도 계산 중) 키 연타 | 이동하지 않고, 끝난 뒤에도 쌓인 입력이 실행되지 않음(상세 로그면 "입력을 무시") |
 | 잘못된 입력 | 어휘에 없는 단어·같은 시작/목표 | 오류 출력, 다른 단어로 대체하지 않음 |
 | 테스트 | Test Runner → EditMode → `PythonRandomTests`, `RoomGeneratorFixtureTests` | 통과(난수 이식은 NumPy·RFC 공개값과 비교) |
@@ -117,7 +124,8 @@ show(); sim.step((1, 0)); show()   # Unity에서 → 키를 누른 결과와 비
 
 ## 7. 요구사항과의 관계·남은 일
 
-- 원본 동작을 유지한 부분: 최대 이동 300회에 도달하면 `이동 한도 도달`로 끝납니다. 목표 방에 들어가도 그 방의 빈 주변은 채웁니다. 생성 순회 순서는 상·우·하·좌(출력은 상·하·좌·우). fastText 보충의 임시 배치 간 중복 검사는 `avoid_adjacent_repeat` 설정과 무관하게 거리 3을 씁니다(원본과 같음).
+- 원본과 달라진 부분: 원본은 `max_moves`(300)에 도달하면 항상 끝나지만, Unity 일반 플레이는 이동 횟수 제한이 없습니다. 테스트에서 `UseMoveLimit`를 켰을 때만 `MaxMoves`(기본 300) 도달 시 `테스트 이동 제한 도달`로 끝납니다(5절).
+- 원본 동작을 유지한 부분: 목표 방에 들어가도 그 방의 빈 주변은 채웁니다. 생성 순회 순서는 상·우·하·좌(출력은 상·하·좌·우). fastText 보충의 임시 배치 간 중복 검사는 `avoid_adjacent_repeat` 설정과 무관하게 거리 3을 씁니다(원본과 같음).
 - 이식하지 않은 것: 자동 플레이어(`choose`), 목표 후보 검사 기록(`check_target`), 결과 JSON·통계.
 - fastText 유사도 캐시는 최근 256개 표기로 제한(원본은 무제한) — 결과에는 영향 없음.
 - 확인 필요: 컴파일, 테스트, 실제 생성 시간(특히 1글자·다의어 목표의 근접도 계산), Python과의 지도 비교, Android(범위 밖).

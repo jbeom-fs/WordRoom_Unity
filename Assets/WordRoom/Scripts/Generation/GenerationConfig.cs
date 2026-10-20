@@ -37,6 +37,12 @@ namespace WordRoom.Generation
         public int GuidanceRamp = 40;
         public double GuidanceMax = 0.03;
         public string GuidanceBasis = "unique";      // 'unique' (distinct rooms visited) or 'moves'
+        /// <summary>
+        /// Test-only move limit. Off by default: normal play has no move limit. Never turned on by settings.json
+        /// (its max_moves only fills MaxMoves); callers enable it explicitly.
+        /// </summary>
+        public bool UseMoveLimit = false;
+        /// <summary>Moves after which the experiment ends with move_limit; used only when UseMoveLimit is on.</summary>
         public int MaxMoves = 300;
 
         /// <summary>Where each value came from (for logs and documentation).</summary>
@@ -73,7 +79,7 @@ namespace WordRoom.Generation
                 GuidanceRamp = s.GetInt("guidance_ramp"),
                 GuidanceMax = s.GetDouble("guidance_max"),
                 GuidanceBasis = s.GetString("guidance_basis"),
-                MaxMoves = s.GetInt("max_moves"),
+                MaxMoves = s.GetInt("max_moves"),      // value only; UseMoveLimit stays off (normal play is unlimited)
                 Source = "데이터 패키지 settings.json (Python 1.1.0 load_config 적용값)",
             };
             return c;
@@ -89,7 +95,8 @@ namespace WordRoom.Generation
             Need(VocabularyLimit >= 1 && MinWordLength >= 1 && MaxWordLength >= 1, "vocabulary_limit, min/max_word_length: 양의 정수여야 합니다.");
             Need(MaxWordLength >= MinWordLength, "최대 글자 수는 최소 글자 수 이상이어야 합니다.");
             Need(RepeatScope == "global" || RepeatScope == "nearby", "중복 금지 범위는 지도 전체 또는 주변 거리여야 합니다.");
-            Need(RepeatRadius >= 1 && SelectionTop >= 1 && RecentWindow >= 1 && MaxMoves >= 1, "repeat_radius, selection_top, recent_window, max_moves: 양의 정수여야 합니다.");
+            Need(RepeatRadius >= 1 && SelectionTop >= 1 && RecentWindow >= 1, "repeat_radius, selection_top, recent_window: 양의 정수여야 합니다.");
+            Need(!UseMoveLimit || MaxMoves >= 1, "테스트 이동 제한을 켠 경우 최대 이동 횟수는 1 이상이어야 합니다.");   // unused when off
             Need(Temperature >= 0 && Temperature <= 1, "선택 온도는 0~1 사이여야 합니다.");
             Need(Diversity >= 0 && Diversity <= 1 && NeighborWeight >= 0 && NeighborWeight <= 1, "diversity, neighbor_weight: 0~1 사이여야 합니다.");
             foreach (var v in new[] { RelationThreshold, RelationStep, RelationFloor })
@@ -129,6 +136,7 @@ namespace WordRoom.Generation
             $"seed {Seed} · 어휘 상위 {VocabularyLimit:N0} ({MinWordLength}~{MaxWordLength}글자) · 관계 기준 {RelationThreshold:0.##}→{RelationFloor:0.##} (폭 {RelationStep:0.##}) · " +
             $"탐색 한도 {PlacementBudget} · fastText 보충 {(FastTextSupplement ? "켬" : "끔")} (선호 하한 {FastTextPreferredMin:0.##}) · " +
             $"목표 유도 {(TargetGuidance ? $"켬 ({GuidanceBasis}, {GuidanceStart}부터 {GuidanceRamp}에 걸쳐 {GuidanceStrength:0.###}→{GuidanceMax:0.###})" : "끔")} · " +
-            $"중복 금지 {(AvoidAdjacentRepeat ? (RepeatScope == "global" ? "지도 전체" : $"거리 {RepeatRadius}") : "끔")} · 최대 이동 {MaxMoves}";
+            $"중복 금지 {(AvoidAdjacentRepeat ? (RepeatScope == "global" ? "지도 전체" : $"거리 {RepeatRadius}") : "끔")} · " +
+            (UseMoveLimit ? $"테스트 이동 제한: {MaxMoves}회" : "이동 제한 없음");
     }
 }
