@@ -164,7 +164,8 @@ MonoBehaviour:
   guidanceBasis: 0
   useMoveLimit: 0
   maxMoves: 3
-  verboseLog: 0
+  verboseLog: 1
+  worldView: {fileID: 0}
 --- !u!114 &80028689
 MonoBehaviour:
   m_ObjectHideFlags: 0

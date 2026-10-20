@@ -5,7 +5,9 @@
         "WordRoom.Data",
         "WordRoom.Data.Validation",
         "WordRoom.Unity",
-        "WordRoom.RoomDebug"
+        "WordRoom.RoomDebug",
+        "WordRoom.Generation",
+        "WordRoom.World"
     ],
     "includePlatforms": [
         "Editor"

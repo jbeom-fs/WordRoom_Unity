@@ -8,6 +8,7 @@ using UnityEngine;
 using WordRoom.Data;
 using WordRoom.Generation;
 using WordRoom.UnityLayer;
+using WordRoom.World;
 
 namespace WordRoom.RoomDebug
 {
@@ -19,8 +20,10 @@ namespace WordRoom.RoomDebug
 
     /// <summary>
     /// Debug-only check of the room generator: Inspector settings, arrow keys (↑ 상, ↓ 하, ← 좌, → 우) and Console
-    /// output. No UI, map, 3D room or network. Generation runs on a worker thread; input is ignored (not queued)
+    /// output. No UI, map or network. Generation runs on a worker thread; input is ignored (not queued)
     /// while data is loading or a request is running. The settings are copied when an experiment starts.
+    /// Optional 3D view (RoomWorldView): after each finished request a snapshot of the current room and its
+    /// existing neighbors is taken on the worker and shown on the main thread; without it only Console output.
     /// </summary>
     [RequireComponent(typeof(WordRoomDataService))]
     public sealed class RoomGenerationDebug : MonoBehaviour
@@ -54,6 +57,10 @@ namespace WordRoom.RoomDebug
         [Tooltip("생성 시간·관계 기준·보충 근거·실패 사유 등을 추가로 출력")]
         [SerializeField] bool verboseLog;
 
+        [Header("3D 표시 (선택)")]
+        [Tooltip("현재 방과 상·하·좌·우 방을 3D로 표시할 RoomWorldView. 비우면 같은 오브젝트의 것을 찾고, 없으면 Console 디버그만 합니다.")]
+        [SerializeField] RoomWorldView worldView;
+
         WordRoomDataService service;
         RoomGenerator generator;
         WordRoomDataset dataset;
@@ -61,7 +68,11 @@ namespace WordRoom.RoomDebug
         bool busy;
         bool waitingLogged;
 
-        void Awake() => service = GetComponent<WordRoomDataService>();
+        void Awake()
+        {
+            service = GetComponent<WordRoomDataService>();
+            if (worldView == null) worldView = GetComponent<RoomWorldView>();
+        }
 
         void OnEnable()
         {
@@ -143,19 +154,22 @@ namespace WordRoom.RoomDebug
             busy = true;
             generator = null;
             dataset = d;
+            var view = worldView != null;
+            if (view) ViewCall(() => worldView.BeginSession());   // previous rooms/doors back to the pools, door states cleared
             Debug.Log($"[방 생성] 새 실험 준비: {d.GetWord(start)} → {d.GetWord(target)} · {config}" +
                       (config.TargetGuidance ? " · 목표 근접도 계산 중" : ""));
             try
             {
-                var (gen, update) = await Task.Run(() =>
+                var (gen, update, snapshot) = await Task.Run(() =>
                 {
                     var g = RoomGenerator.Create(d, config, start, target, token);
                     var u = g.Start(token);
-                    return (g, u);
+                    return (g, u, view ? RoomViewSnapshot.Capture(g.Map) : null);   // taken here, after the request finished
                 }, token);
                 if (this == null || token.IsCancellationRequested) return;
                 generator = gen;
                 LogUpdate(update);
+                ShowView(snapshot);
             }
             catch (OperationCanceledException)
             {
@@ -224,16 +238,21 @@ namespace WordRoom.RoomDebug
             busy = true;
             var token = cts.Token;
             var gen = generator;
+            var view = worldView != null;
             try
             {
-                var (update, refusal) = await Task.Run(() =>
+                var (update, refusal, snapshot) = await Task.Run(() =>
                 {
                     var u = gen.Move(direction, out var r, token);
-                    return (u, r);
+                    return (u, r, view && u != null ? RoomViewSnapshot.Capture(gen.Map) : null);
                 }, token);
-                if (this == null || token.IsCancellationRequested || gen != generator) return;
-                if (update == null) Debug.Log($"[방 생성] 이동 불가: {refusal}");
-                else LogUpdate(update);
+                if (this == null || token.IsCancellationRequested || gen != generator) return;   // stale result of an earlier experiment
+                if (update == null) Debug.Log($"[방 생성] 이동 불가: {refusal}");     // refused: the 3D view is not moved
+                else
+                {
+                    LogUpdate(update);
+                    ShowView(snapshot);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -245,6 +264,24 @@ namespace WordRoom.RoomDebug
             finally
             {
                 busy = false;
+            }
+        }
+
+        // ---- 3D view (optional; its failures never stop generation or Console output) -----------------------
+        void ShowView(RoomViewSnapshot snapshot)
+        {
+            if (snapshot != null && worldView != null) ViewCall(() => worldView.Show(snapshot));
+        }
+
+        static void ViewCall(Action action)
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[3D 방] 표시 갱신 실패(단어 생성은 계속): {e}");
             }
         }
 

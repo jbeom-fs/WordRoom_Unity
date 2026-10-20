@@ -1,0 +1,16 @@
+{
+    "name": "WordRoom.World",
+    "rootNamespace": "WordRoom.World",
+    "references": [
+        "WordRoom.Generation"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

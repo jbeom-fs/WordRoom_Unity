@@ -5,6 +5,7 @@
         "WordRoom.Data",
         "WordRoom.Unity",
         "WordRoom.Generation",
+        "WordRoom.World",
         "Unity.InputSystem"
     ],
     "includePlatforms": [],
