@@ -13,7 +13,8 @@ namespace WordRoom.World
     /// calls the generator, never creates words or rooms, and returning an instance never removes map data.
     /// Each update computes the wanted rooms and doors, returns what is no longer wanted first, then rents only
     /// what is missing; instances still wanted stay as they are. Door states live in DoorStateStore per
-    /// connection, apart from the door instances. Main thread only.
+    /// connection, apart from the door instances. Each update also writes the snapshot's neighbor words to the wall
+    /// signs of every shown room. Main thread only.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class RoomWorldView : MonoBehaviour
@@ -139,6 +140,10 @@ namespace WordRoom.World
             openLift = doorOpenLift > 0 ? doorOpenLift : layout.DoorBody.size.y;
             ready = true;
             LogPrepared(rebuilt);
+            var missingSigns = new List<string>();
+            RoomView.FindSigns(layout.RoomPrefab.transform, missingSigns);
+            if (missingSigns.Count > 0)
+                Debug.LogWarning($"[3D 방] 벽 표지판 텍스트가 없어 해당 방향은 단어를 표시하지 않습니다(방·문 표시와 단어 생성은 계속): {string.Join(", ", missingSigns)}");
         }
 
         /// <summary>Shows the snapshot's rooms (current + existing 상·하·좌·우) and the doors of their connections. Needs BeginSession.</summary>
@@ -178,6 +183,8 @@ namespace WordRoom.World
                 doorsIn++;
                 if (created) doorsNew++;
             }
+            foreach (var kv in rooms)                              // new and kept rooms: a new neighbor replaces 미생성
+                if (kv.Value != null && s.Signs.TryGetValue(kv.Key, out var words)) kv.Value.SetSigns(words);
 
             if (moveCamera && debugCamera != null)
                 debugCamera.transform.SetPositionAndRotation(RoomOrigin(s.Center) + cameraOffset, Quaternion.Euler(cameraEuler));
@@ -284,7 +291,9 @@ namespace WordRoom.World
             var go = Instantiate(l.RoomPrefab, parent, false);
             go.SetActive(false);
             var v = go.GetComponent<RoomView>();
-            return v != null ? v : go.AddComponent<RoomView>();
+            if (v == null) v = go.AddComponent<RoomView>();
+            v.Init();                                      // sign texts found once per instance
+            return v;
         }
 
         static DoorView CreateDoor(RoomPrefabLayout l, Transform parent)

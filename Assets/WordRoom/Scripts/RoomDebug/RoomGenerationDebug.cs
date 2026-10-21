@@ -164,7 +164,7 @@ namespace WordRoom.RoomDebug
                 {
                     var g = RoomGenerator.Create(d, config, start, target, token);
                     var u = g.Start(token);
-                    return (g, u, view ? RoomViewSnapshot.Capture(g.Map) : null);   // taken here, after the request finished
+                    return (g, u, view ? RoomViewSnapshot.Capture(g.Map, d.GetWord) : null);   // taken here, after the request finished
                 }, token);
                 if (this == null || token.IsCancellationRequested) return;
                 generator = gen;
@@ -238,13 +238,14 @@ namespace WordRoom.RoomDebug
             busy = true;
             var token = cts.Token;
             var gen = generator;
+            var d = dataset;
             var view = worldView != null;
             try
             {
                 var (update, refusal, snapshot) = await Task.Run(() =>
                 {
                     var u = gen.Move(direction, out var r, token);
-                    return (u, r, view && u != null ? RoomViewSnapshot.Capture(gen.Map) : null);
+                    return (u, r, view && u != null ? RoomViewSnapshot.Capture(gen.Map, d.GetWord) : null);
                 }, token);
                 if (this == null || token.IsCancellationRequested || gen != generator) return;   // stale result of an earlier experiment
                 if (update == null) Debug.Log($"[방 생성] 이동 불가: {refusal}");     // refused: the 3D view is not moved
