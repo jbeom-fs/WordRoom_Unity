@@ -3,7 +3,8 @@
     "rootNamespace": "WordRoom.World",
     "references": [
         "WordRoom.Generation",
-        "Unity.TextMeshPro"
+        "Unity.TextMeshPro",
+        "Unity.InputSystem"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

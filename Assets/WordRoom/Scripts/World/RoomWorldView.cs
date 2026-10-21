@@ -146,8 +146,11 @@ namespace WordRoom.World
                 Debug.LogWarning($"[3D 방] 벽 표지판 텍스트가 없어 해당 방향은 단어를 표시하지 않습니다(방·문 표시와 단어 생성은 계속): {string.Join(", ", missingSigns)}");
         }
 
-        /// <summary>Shows the snapshot's rooms (current + existing 상·하·좌·우) and the doors of their connections. Needs BeginSession.</summary>
-        public void Show(RoomViewSnapshot s)
+        /// <summary>
+        /// Shows the snapshot's rooms (current + existing 상·하·좌·우) and the doors of their connections. Needs BeginSession.
+        /// `allowDebugCamera` false (first-person player in use) leaves the debug camera where it is.
+        /// </summary>
+        public void Show(RoomViewSnapshot s, bool allowDebugCamera)
         {
             if (s == null || !ready) return;
             var wantRooms = new Dictionary<GridPos, int>();
@@ -186,7 +189,7 @@ namespace WordRoom.World
             foreach (var kv in rooms)                              // new and kept rooms: a new neighbor replaces 미생성
                 if (kv.Value != null && s.Signs.TryGetValue(kv.Key, out var words)) kv.Value.SetSigns(words);
 
-            if (moveCamera && debugCamera != null)
+            if (allowDebugCamera && moveCamera && debugCamera != null)
                 debugCamera.transform.SetPositionAndRotation(RoomOrigin(s.Center) + cameraOffset, Quaternion.Euler(cameraEuler));
 
             if (!verbosePoolLog) return;
@@ -198,6 +201,13 @@ namespace WordRoom.World
             sb.Append($"\n풀 누적: 방 생성 {roomPool.Created}·대여 {roomPool.Rents}·반환 {roomPool.Returns}·대기 {roomPool.FreeCount}, " +
                       $"문 생성 {doorPool.Created}·대여 {doorPool.Rents}·반환 {doorPool.Returns}·대기 {doorPool.FreeCount} · 저장된 문 상태 {doorStates.Count}");
             Debug.Log(sb.ToString());
+        }
+
+        /// <summary>The shown room instance at p (e.g. to put the player on its floor); false when it is not shown.</summary>
+        public bool TryGetShownRoom(GridPos p, out Transform room)
+        {
+            room = rooms.TryGetValue(p, out var v) && v != null ? v.transform : null;
+            return room != null;
         }
 
         /// <summary>

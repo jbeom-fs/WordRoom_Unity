@@ -24,6 +24,8 @@ namespace WordRoom.RoomDebug
     /// while data is loading or a request is running. The settings are copied when an experiment starts.
     /// Optional 3D view (RoomWorldView): after each finished request a snapshot of the current room and its
     /// existing neighbors is taken on the worker and shown on the main thread; without it only Console output.
+    /// Optional first-person player: placed on the start room floor once it is shown; while it is set, the arrow
+    /// keys do not move the logical position and the debug camera is not moved.
     /// </summary>
     [RequireComponent(typeof(WordRoomDataService))]
     public sealed class RoomGenerationDebug : MonoBehaviour
@@ -60,6 +62,10 @@ namespace WordRoom.RoomDebug
         [Header("3D 표시 (선택)")]
         [Tooltip("현재 방과 상·하·좌·우 방을 3D로 표시할 RoomWorldView. 비우면 같은 오브젝트의 것을 찾고, 없으면 Console 디버그만 합니다.")]
         [SerializeField] RoomWorldView worldView;
+
+        [Header("1인칭 (선택)")]
+        [Tooltip("연결하면 시작 방 표시 후 이 플레이어를 시작 방 바닥에 배치하고, 확인용 카메라 자동 이동과 방향키 논리 이동을 하지 않습니다. 비우면 기존 방향키·확인용 카메라 디버그.")]
+        [SerializeField] FirstPersonPlayer player;
 
         WordRoomDataService service;
         RoomGenerator generator;
@@ -155,6 +161,7 @@ namespace WordRoom.RoomDebug
             generator = null;
             dataset = d;
             var view = worldView != null;
+            if (player != null) player.Suspend();                 // no walking or falling until the new start room is shown
             if (view) ViewCall(() => worldView.BeginSession());   // previous rooms/doors back to the pools, door states cleared
             Debug.Log($"[방 생성] 새 실험 준비: {d.GetWord(start)} → {d.GetWord(target)} · {config}" +
                       (config.TargetGuidance ? " · 목표 근접도 계산 중" : ""));
@@ -170,6 +177,7 @@ namespace WordRoom.RoomDebug
                 generator = gen;
                 LogUpdate(update);
                 ShowView(snapshot);
+                PlacePlayer(snapshot);
             }
             catch (OperationCanceledException)
             {
@@ -192,6 +200,11 @@ namespace WordRoom.RoomDebug
         {
             var direction = ReadDirection();
             if (direction == null) return;
+            if (player != null)
+            {
+                Debug.Log("[방 생성] 1인칭 플레이어가 연결되어 방향키 논리 이동을 하지 않습니다(플레이어 위치와 지도 위치 불일치 방지). 방향키 디버그는 Player 칸을 비우고 사용하세요.");
+                return;
+            }
             if (busy || generator == null)
             {
                 if (verboseLog) Debug.Log("[방 생성] 로딩·생성 중이라 입력을 무시했습니다 (입력은 쌓아두지 않음).");
@@ -271,7 +284,18 @@ namespace WordRoom.RoomDebug
         // ---- 3D view (optional; its failures never stop generation or Console output) -----------------------
         void ShowView(RoomViewSnapshot snapshot)
         {
-            if (snapshot != null && worldView != null) ViewCall(() => worldView.Show(snapshot));
+            if (snapshot != null && worldView != null) ViewCall(() => worldView.Show(snapshot, player == null));
+        }
+
+        /// <summary>After the start room is shown: puts the player on its floor, or reports why it stays stopped.</summary>
+        void PlacePlayer(RoomViewSnapshot snapshot)
+        {
+            if (player == null) return;
+            string failure;
+            if (worldView == null || snapshot == null) failure = "RoomWorldView가 없어 시작 방을 3D로 표시하지 않았습니다";
+            else if (!worldView.TryGetShownRoom(snapshot.Center, out var room)) failure = "시작 방이 3D로 표시되지 않았습니다(위 [3D 방] 오류 확인)";
+            else if (player.PlaceAt(room, out failure)) return;
+            Debug.LogError($"[1인칭] 시작 위치 배치 실패 — 이동하지 않습니다(단어 생성·Console 디버그는 계속): {failure}");
         }
 
         static void ViewCall(Action action)
