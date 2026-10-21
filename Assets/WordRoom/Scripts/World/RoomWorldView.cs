@@ -98,6 +98,8 @@ namespace WordRoom.World
             ReleaseAll();
             doorStates.Clear();
             ready = false;
+            HandOverIfUserRoot(ref autoRoomRoot);         // before any cleanup or root resolving, also on a setting error
+            HandOverIfUserRoot(ref autoDoorRoot);
 
             var owned = new HashSet<Transform>();         // instances of retired pools, to tell them from user objects
             var rebuilt = PrepareLayout();
@@ -319,8 +321,19 @@ namespace WordRoom.World
         }
 
         /// <summary>
+        /// An automatic root the user now names as Room Root or Door Root (either one) is theirs: it is no longer
+        /// managed and never deleted by this component. Neither the object nor the Inspector fields change.
+        /// </summary>
+        bool HandOverIfUserRoot(ref Transform auto)
+        {
+            if (auto == null || (auto != roomRoot && auto != doorRoot)) return false;
+            auto = null;
+            return true;
+        }
+
+        /// <summary>
         /// Deletes an automatic root no pool uses any more, unless it holds objects that are not pool instances:
-        /// then it is left in place (with a warning) and simply no longer managed.
+        /// then it is left in place (with a warning) and simply no longer managed. A root the user names is kept.
         /// </summary>
         void ReleaseAutoRootIfUnused(ref Transform auto, HashSet<Transform> owned)
         {
@@ -330,6 +343,7 @@ namespace WordRoom.World
                 auto = null;                               // destroyed elsewhere
                 return;
             }
+            if (HandOverIfUserRoot(ref auto)) return;
             if ((roomPool != null && roomPool.Parent == auto) || (doorPool != null && doorPool.Parent == auto)) return;
             var foreign = new List<string>();
             foreach (Transform child in auto)
