@@ -75,6 +75,8 @@ namespace WordRoom.RoomDebug
         [SerializeField] FirstPersonPlayer player;
         [Tooltip("화면 안내(문 열기·목표 도달·실험 종료·진행 정지·재배치 필요). 진행 중 자막은 없습니다. 비우면 같은 오브젝트의 것을 찾고, 없으면 안내 없이 진행합니다.")]
         [SerializeField] PlayHint hint;
+        [Tooltip("화면 좌상단 현재·목표 단어 HUD. 1인칭 플레이어가 배치된 동안만 보입니다. 비우면 같은 오브젝트의 것을 찾고, 없으면 HUD 없이 진행합니다.")]
+        [SerializeField] WordRoomHud hud;
 
         const float DoorReach = 2f;          // E reaches doors up to this far from the eye along the screen center
 
@@ -85,12 +87,15 @@ namespace WordRoom.RoomDebug
         bool busy;
         bool waitingLogged;
         bool hintMissingLogged;
+        bool hudMissingLogged;
 
         // First-person play of the current experiment (main thread only).
         FirstPersonPlayer controlled;        // the player placed for this experiment; null = nobody walks
         string status;                       // experiment status from the last finished request (copied there)
         string halt;                         // why play stopped after an error; null = not stopped
         Vector3 lastPosition;                // player position at the previous entry check
+        string hudCurrent;                   // HUD words from the last confirmed placement or entry snapshot; null = none
+        string hudTarget;
 
         /// <summary>The connected player when its component and object are active; null = arrow-key/camera debug.</summary>
         FirstPersonPlayer ActivePlayer => player != null && player.isActiveAndEnabled ? player : null;
@@ -104,6 +109,7 @@ namespace WordRoom.RoomDebug
             service = GetComponent<WordRoomDataService>();
             if (worldView == null) worldView = GetComponent<RoomWorldView>();
             if (hint == null) hint = GetComponent<PlayHint>();
+            if (hud == null) hud = GetComponent<WordRoomHud>();
             if (player != null) player.RememberViewHome();   // also for an inactive player, before any debug camera move
         }
 
@@ -119,6 +125,7 @@ namespace WordRoom.RoomDebug
             cts?.Cancel();          // results of running work are discarded (see the token checks after await)
             ReleaseControlled();    // nobody checks room entries now; enabling again does not resume this player
             SetHint(null);
+            if (hud != null) hud.Clear();   // words already dropped with the player; enabling again shows nothing old
         }
 
         void Start()
@@ -198,6 +205,7 @@ namespace WordRoom.RoomDebug
             controlled = null;
             status = null;
             halt = null;
+            SetHudWords(null, null);                              // the previous experiment's words never come back
             if (view) ViewCall(() => worldView.BeginSession());   // previous rooms/doors back to the pools, door states cleared
             Debug.Log($"[방 생성] 새 실험 준비: {d.GetWord(start)} → {d.GetWord(target)} · {config}" +
                       (config.TargetGuidance ? " · 목표 근접도 계산 중" : ""));
@@ -216,6 +224,7 @@ namespace WordRoom.RoomDebug
                 var shown = ShowView(snapshot, out var showFailure);
                 var placeFailure = PlacePlayer(snapshot, shown, showFailure);
                 if (placeFailure != null) FailStart($"시작 위치 배치 실패 — {placeFailure}", stoppedControlled, stoppedPlayer, ActivePlayer);
+                else if (controlled != null) SetHudWords(snapshot.CurrentWord, snapshot.TargetWord);   // after the view and placement
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -255,6 +264,7 @@ namespace WordRoom.RoomDebug
         void Update()
         {
             TrackPlayer();
+            RefreshHud();
             var direction = ReadDirection();
             if (ActivePlayer != null)
             {
@@ -361,6 +371,7 @@ namespace WordRoom.RoomDebug
         {
             if (controlled != null) controlled.Release();
             controlled = null;
+            SetHudWords(null, null);         // shown again only after a new experiment places a player
         }
 
         /// <summary>
@@ -519,6 +530,7 @@ namespace WordRoom.RoomDebug
                 }
                 lastPosition = p.transform.position;
                 p.SetMovementLocked(status != "running");                          // finished: look and Escape only
+                SetHudWords(snapshot.CurrentWord, hudTarget);                      // entry confirmed and shown: new current room, same target
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -542,7 +554,36 @@ namespace WordRoom.RoomDebug
         {
             halt = reason;
             if (controlled != null) controlled.Suspend();
+            RefreshHud();                    // hidden: the shown words may no longer match the map
             Debug.LogError($"[1인칭] 진행 정지 — 이동·문 열기를 멈춥니다. 새 실험을 시작하세요: {reason}");
+        }
+
+        void SetHudWords(string current, string target)
+        {
+            hudCurrent = current;
+            hudTarget = target;
+            RefreshHud();
+        }
+
+        /// <summary>
+        /// The HUD is visible only while a first-person player is placed for this experiment and play is not stopped
+        /// (also while a door opens or a request runs, and after the goal or another end). It shows the words of the
+        /// last confirmed placement or entry; a door opening never changes them. Arrow-key/Console debug, a
+        /// released player, a stop or a new experiment hide it. Cheap per frame: the HUD only compares strings.
+        /// </summary>
+        void RefreshHud()
+        {
+            var visible = controlled != null && halt == null && hudCurrent != null && hudTarget != null;
+            if (hud != null)
+            {
+                if (visible) hud.Show(hudCurrent, hudTarget);
+                else hud.Hide();
+            }
+            else if (visible && !hudMissingLogged)
+            {
+                hudMissingLogged = true;
+                Debug.LogWarning("[HUD] WordRoomHud가 없어 현재·목표 단어를 화면에 표시하지 않습니다(플레이는 계속). RoomGenerationDebug 오브젝트에 WordRoomHud를 추가하세요.");
+            }
         }
 
         void SetHint(string text)
