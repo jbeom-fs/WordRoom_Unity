@@ -98,7 +98,8 @@ namespace WordRoom.World
             }
         }
 
-        static Vector3 Tangent(Direction d) => d == Direction.Up || d == Direction.Down ? Vector3.right : Vector3.forward;
+        /// <summary>Axis along a side's wall (상·하 → X, 좌·우 → Z).</summary>
+        public static Vector3 Tangent(Direction d) => d == Direction.Up || d == Direction.Down ? Vector3.right : Vector3.forward;
 
         /// <summary>Reads both prefabs. Throws InvalidOperationException with a user-facing reason.</summary>
         public static RoomPrefabLayout Build(GameObject roomPrefab, GameObject doorPrefab, DoorPointOverrides overrides,

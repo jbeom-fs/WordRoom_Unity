@@ -7,8 +7,11 @@ namespace WordRoom.World
     /// First-person walking inside the shown rooms: CharacterController with the root at the feet, WASD along the
     /// horizontal look direction, gravity, mouse look (yaw on this root, pitch on the camera child). Does nothing
     /// until PlaceAt put it on a room floor, so it never falls before the first room exists; Suspend stops it again
-    /// for a new experiment. The cursor is locked while playing: Escape or focus loss releases it, a click in the
-    /// Game view locks it again; no movement or look input while it is released. No jump, run, crouch or head bob.
+    /// for a new experiment, and disabling the component also drops the placement (re-enabling never resumes an
+    /// earlier session). SetMovementLocked stops only walking: look, gravity and Escape keep working (room entry
+    /// in progress, finished experiment, stop after an error). The cursor is locked while playing: Escape or focus
+    /// loss releases it, a click in the Game view locks it again; no movement or look input while it is released.
+    /// No jump, run, crouch or head bob. Door aiming and the E key are read here; what they do is decided outside.
     /// </summary>
     [DisallowMultipleComponent]
     [RequireComponent(typeof(CharacterController))]
@@ -24,40 +27,85 @@ namespace WordRoom.World
         [SerializeField] float lookSensitivity = 0.1f;
         [Tooltip("상하 시점 제한(도)")]
         [SerializeField] float pitchLimit = 85f;
+        [Tooltip("켜져 있으면 아래 '시점 기준 위치'를 원래 시점으로 씁니다. 꺼져 있으면 실행 시 확인용 카메라가 옮기기 전의 시점 카메라 위치를 한 번 기록합니다.")]
+        [SerializeField] bool viewHomeSaved;
+        [Tooltip("시점 카메라의 원래 로컬 위치(발 기준, 기본 장면 1.6m). 배치할 때마다 이 위치·수평 시점으로 되돌립니다. 시점 카메라 높이를 바꾸면 이 값도 맞추세요.")]
+        [SerializeField] Vector3 viewHomeLocalPosition;
 
         CharacterController controller;
         float pitch;
         float verticalSpeed;
         bool placed;
+        bool movementLocked;
 
         static bool CursorLocked => Cursor.lockState == CursorLockMode.Locked;
+
+        /// <summary>Placed on a floor by PlaceAt and enabled: walking (unless locked), looking and falling run.</summary>
+        public bool Placed => placed && isActiveAndEnabled;
+
+        /// <summary>Placed, cursor locked and the game focused: the state in which look and key input are read.</summary>
+        public bool HasControlFocus => Placed && CursorLocked && Application.isFocused;
+
+        /// <summary>E pressed in this frame (once per press, holding does not repeat) while HasControlFocus.</summary>
+        public bool InteractPressed => HasControlFocus && Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame;
 
         void Awake()
         {
             controller = GetComponent<CharacterController>();
             if (view == null) Debug.LogError("[1인칭] 시점 카메라(View)가 지정되지 않아 상하 시점을 적용하지 않습니다.", this);
+            RememberViewHome();
         }
+
+        /// <summary>
+        /// Records the view camera's current local position as the original eye position, once, unless one is saved
+        /// already (serialized in the scene or recorded earlier). Callable while this object is inactive (Awake has
+        /// not run yet): the coordinator calls it before the debug camera — possibly this view — can be moved, so a
+        /// debug pose is never taken for the eye position.
+        /// </summary>
+        public void RememberViewHome()
+        {
+            if (viewHomeSaved || view == null) return;
+            viewHomeLocalPosition = view.localPosition;
+            viewHomeSaved = true;
+        }
+
+        /// <summary>Unlocks and shows the cursor (shared by every player; no player needed).</summary>
+        public static void ReleaseCursor() => SetCursorLock(false);
 
         /// <summary>Stops walking, looking and falling until the next PlaceAt (new experiment, rooms not shown yet).</summary>
         public void Suspend()
         {
             placed = false;
+            movementLocked = false;
             verticalSpeed = 0f;
         }
+
+        /// <summary>No longer controlled (disconnected or replaced): stopped like Suspend and the cursor released.</summary>
+        public void Release()
+        {
+            Suspend();
+            SetCursorLock(false);
+        }
+
+        /// <summary>Locked: no walking; look, gravity and Escape go on. Input is dropped, never queued.</summary>
+        public void SetMovementLocked(bool locked) => movementLocked = locked;
 
         /// <summary>
         /// Puts the feet on the floor below the center of a shown room (its actual height, found by a ray that skips
         /// this player's own colliders), facing 상(+Z) with a level view and no falling speed, then allows movement.
-        /// Returns false with the reason and stays suspended when no floor of that room is below its center.
+        /// Returns false with the reason and stays suspended when no floor of that room is below its center, or
+        /// when this component or its object is inactive (no placement and no cursor lock then).
         /// </summary>
         public bool PlaceAt(Transform room, out string failure)
         {
             Suspend();
+            if (!isActiveAndEnabled)
+            {
+                failure = "플레이어 컴포넌트나 오브젝트가 비활성입니다";
+                return false;
+            }
             Physics.SyncTransforms();                  // pooled rooms were just moved and activated
-            var origin = room.position + Vector3.up * controller.height;
-            RaycastHit? floor = null;
-            foreach (var h in Physics.RaycastAll(origin, Vector3.down, controller.height * 2f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
-                if (!h.collider.transform.IsChildOf(transform) && (floor == null || h.distance < floor.Value.distance)) floor = h;   // never our own collider
+            var floor = FloorBelow(room.position);
             if (floor == null)
             {
                 failure = $"방 '{room.name}' 중앙 아래에서 바닥 Collider를 찾지 못했습니다";
@@ -73,11 +121,52 @@ namespace WordRoom.World
             transform.SetPositionAndRotation(floor.Value.point + Vector3.up * controller.skinWidth, Quaternion.identity);
             controller.enabled = true;
             pitch = 0f;
-            if (view != null) view.localRotation = Quaternion.identity;
+            if (view != null) view.SetLocalPositionAndRotation(viewHomeSaved ? viewHomeLocalPosition : view.localPosition, Quaternion.identity);
             placed = true;
             if (Application.isFocused) SetCursorLock(true);
             failure = null;
             return true;
+        }
+
+        /// <summary>
+        /// Whether the first floor below the player's current position (same ray rules as PlaceAt) belongs to `room`.
+        /// Position and view are left as they are.
+        /// </summary>
+        public bool IsOnFloorOf(Transform room, out string failure)
+        {
+            Physics.SyncTransforms();                  // rooms were just shown or moved
+            var floor = FloorBelow(transform.position);
+            if (floor == null) failure = $"플레이어 아래에서 바닥 Collider를 찾지 못했습니다(방 '{room.name}')";
+            else if (!floor.Value.collider.transform.IsChildOf(room)) failure = $"플레이어 아래 첫 Collider '{floor.Value.collider.name}'가 방 '{room.name}'의 것이 아닙니다";
+            else failure = null;
+            return failure == null;
+        }
+
+        /// <summary>
+        /// The door whose collider is the first valid obstacle on the screen-center ray within `maxDistance`.
+        /// This player's own colliders, triggers and the Ignore Raycast layer (door passage blocks) are skipped;
+        /// any other first hit (wall, sign, floor) hides the doors behind it.
+        /// </summary>
+        public bool TryGetAimedDoor(float maxDistance, out DoorView door)
+        {
+            door = null;
+            var eye = view != null ? view : transform;
+            RaycastHit? first = null;
+            foreach (var h in Physics.RaycastAll(eye.position, eye.forward, maxDistance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+                if (!h.collider.transform.IsChildOf(transform) && (first == null || h.distance < first.Value.distance)) first = h;
+            if (first == null) return false;
+            door = first.Value.collider.GetComponentInParent<DoorView>();
+            return door != null;
+        }
+
+        /// <summary>Nearest non-trigger collider below `point` (from body height above it), never our own.</summary>
+        RaycastHit? FloorBelow(Vector3 point)
+        {
+            var origin = point + Vector3.up * controller.height;
+            RaycastHit? floor = null;
+            foreach (var h in Physics.RaycastAll(origin, Vector3.down, controller.height * 2f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+                if (!h.collider.transform.IsChildOf(transform) && (floor == null || h.distance < floor.Value.distance)) floor = h;   // never our own collider
+            return floor;
         }
 
         void Update()
@@ -92,7 +181,7 @@ namespace WordRoom.World
             if (CursorLocked && Application.isFocused)
             {
                 if (mouse != null) Look(mouse.delta.ReadValue());
-                if (kb != null)
+                if (kb != null && !movementLocked)
                     input = new Vector2((kb.dKey.isPressed ? 1f : 0f) - (kb.aKey.isPressed ? 1f : 0f),
                                         (kb.wKey.isPressed ? 1f : 0f) - (kb.sKey.isPressed ? 1f : 0f));
             }
@@ -117,7 +206,13 @@ namespace WordRoom.World
             if (!focus) SetCursorLock(false);
         }
 
-        void OnDisable() => SetCursorLock(false);       // also runs when the component or object is destroyed
+        // Also runs when the component or object is destroyed. Dropping the placement means enabling it again
+        // never resumes walking or falling from an earlier placement; only the next PlaceAt does.
+        void OnDisable()
+        {
+            Suspend();
+            SetCursorLock(false);
+        }
 
         static void SetCursorLock(bool locked)
         {

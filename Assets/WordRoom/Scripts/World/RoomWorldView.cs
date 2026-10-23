@@ -15,11 +15,17 @@ namespace WordRoom.World
     /// what is missing; instances still wanted stay as they are. Door states live in DoorStateStore per
     /// connection, apart from the door instances. Each update also writes the snapshot's neighbor words to the wall
     /// signs of every shown room. Main thread only.
+    /// Doors and passing are separate: a door of the current room toward a shown room can be opened (stored Open,
+    /// then slid up); a doorway lets the player through only while its door is fully open and it joins the current
+    /// room (the center of the last shown snapshot) to another shown room — every other doorway keeps its passage
+    /// block on, also for open doors toward rooms outside the shown set. TryDetectEntry tells when the player has
+    /// passed such a doorway; moving the logical position is up to the caller (through the generator request).
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class RoomWorldView : MonoBehaviour
     {
         const int MaxShownRooms = 5;
+        const float EntryDepth = 0.15f;      // player center this far past the room boundary = entered the next room
 
         [Header("프리팹 (사용자 제작 — 코드가 형태·크기·재질을 바꾸지 않음)")]
         [Tooltip("방 프리팹 (예: Assets/Prefabs/TestRoomPrefab)")]
@@ -38,8 +44,10 @@ namespace WordRoom.World
         [SerializeField] string doorBodyName = "Door";
         [Tooltip("닫힌 문 위치 보정(출입구 기준 좌표). x: 벽 바깥쪽(+)/방 안쪽(-), y: 위(+), z: 출입구 가운데 방향(+). 0이면 DoorPoint 모서리에 문 프리팹 피벗을 둡니다.")]
         [SerializeField] Vector3 doorOffset = Vector3.zero;
-        [Tooltip("열림 상태에서 문 본체가 위로 올라가는 거리. 0 이하면 문 본체 높이. 이번 단계에는 문을 여는 입력·애니메이션이 없습니다.")]
+        [Tooltip("열림 상태에서 문 본체가 월드 위쪽으로 올라가는 거리. 0 이하면 문 본체 높이(TestDoor 2.2m). 새 실험 시작 시 고정.")]
         [SerializeField] float doorOpenLift;
+        [Tooltip("문이 다 열릴 때까지 걸리는 시간(초). 다 열린 뒤에만 통과할 수 있습니다. 새 실험 시작 시 고정.")]
+        [SerializeField] float doorOpenSeconds = 0.5f;
 
         [Header("배치 (새 실험 시작 시 고정)")]
         [Tooltip("좌표 (0, 0) 방의 월드 위치")]
@@ -69,7 +77,7 @@ namespace WordRoom.World
 
         // Fixed at BeginSession; rents, binds and pool create callbacks use only these, never the Inspector fields:
         // layout = prefabs, door body name, DoorPoints and door poses; each pool's Parent = the root resolved for
-        // this experiment; spacing/origin/openLift = placement values.
+        // this experiment; spacing/origin/openLift/openSeconds/doorwayHalfWidth = placement values.
         RoomPrefabLayout layout;
         string layoutKey;
         ViewPool<RoomView> roomPool;
@@ -77,7 +85,10 @@ namespace WordRoom.World
         float spacing;
         Vector3 origin;
         float openLift;
+        float openSeconds;
+        float doorwayHalfWidth;
         bool ready;
+        GridPos? center;                      // current room of the last shown snapshot
 
         // Roots this component created itself (never written to the Inspector fields), reused across experiments.
         Transform autoRoomRoot;
@@ -99,6 +110,7 @@ namespace WordRoom.World
             ReleaseAll();
             doorStates.Clear();
             ready = false;
+            center = null;
             HandOverIfUserRoot(ref autoRoomRoot);         // before any cleanup or root resolving, also on a setting error
             HandOverIfUserRoot(ref autoDoorRoot);
 
@@ -138,6 +150,8 @@ namespace WordRoom.World
             spacing = roomSpacing > 0 ? roomSpacing : layout.MeasuredSpacing;
             origin = worldOrigin;
             openLift = doorOpenLift > 0 ? doorOpenLift : layout.DoorBody.size.y;
+            openSeconds = Mathf.Max(0f, doorOpenSeconds);
+            doorwayHalfWidth = Mathf.Max(layout.DoorBody.size.x, layout.DoorBody.size.z) * 0.5f;   // closed body width = doorway
             ready = true;
             LogPrepared(rebuilt);
             var missingSigns = new List<string>();
@@ -149,10 +163,24 @@ namespace WordRoom.World
         /// <summary>
         /// Shows the snapshot's rooms (current + existing 상·하·좌·우) and the doors of their connections. Needs BeginSession.
         /// `allowDebugCamera` false (first-person player in use) leaves the debug camera where it is.
+        /// Returns whether everything the snapshot needs is really usable afterwards: each of its rooms and the door
+        /// of every doorway of those rooms (also toward 미생성 or hidden rooms) is a live, bound, active instance, and
+        /// every door's passage block exists and is in the state passing allows. A failed rent is logged and the
+        /// update goes on as before, but the result is then false with the missing parts in `failure`. Rooms that
+        /// were never generated are not part of the snapshot and never count as missing.
         /// </summary>
-        public void Show(RoomViewSnapshot s, bool allowDebugCamera)
+        public bool Show(RoomViewSnapshot s, bool allowDebugCamera, out string failure)
         {
-            if (s == null || !ready) return;
+            if (s == null)
+            {
+                failure = "표시할 스냅샷이 없습니다";
+                return false;
+            }
+            if (!ready)
+            {
+                failure = "3D 표시 설정 오류로 이번 실험은 3D 표시를 하지 않습니다(위 [3D 방] 오류 확인)";
+                return false;
+            }
             var wantRooms = new Dictionary<GridPos, int>();
             foreach (var kv in s.Rooms)
                 if (wantRooms.Count < MaxShownRooms) wantRooms[kv.Key] = kv.Value;
@@ -188,11 +216,33 @@ namespace WordRoom.World
             }
             foreach (var kv in rooms)                              // new and kept rooms: a new neighbor replaces 미생성
                 if (kv.Value != null && s.Signs.TryGetValue(kv.Key, out var words)) kv.Value.SetSigns(words);
+            center = s.Center;
+            UpdatePassages();
+            var complete = CheckShown(wantRooms.Keys, wantDoors, out failure);
+            if (!complete) Debug.LogError($"[3D 방] 표시 준비 실패 — {failure}");
 
             if (allowDebugCamera && moveCamera && debugCamera != null)
                 debugCamera.transform.SetPositionAndRotation(RoomOrigin(s.Center) + cameraOffset, Quaternion.Euler(cameraEuler));
 
-            if (!verbosePoolLog) return;
+            if (verbosePoolLog) LogShown(s, roomsIn, roomsNew, roomsOut, doorsIn, doorsNew, doorsOut);
+            return complete;
+        }
+
+        /// <summary>Wanted rooms and doors that are not usable instances (by value, not by dictionary key).</summary>
+        bool CheckShown(IEnumerable<GridPos> wantRooms, IEnumerable<RoomConnection> wantDoors, out string failure)
+        {
+            var missing = new List<string>();
+            foreach (var p in wantRooms)
+                if (!rooms.TryGetValue(p, out var r) || r == null || !r.IsUsable(p)) missing.Add($"방 {p}");
+            foreach (var id in wantDoors)
+                if (!doors.TryGetValue(id, out var door) || door == null || !door.IsReady(id, center != null && IsPassable(id, center.Value)))
+                    missing.Add($"문·출입 차단 {id}");
+            failure = missing.Count == 0 ? null : $"사용할 수 없는 방·문이 있습니다: {string.Join(", ", missing)}";
+            return failure == null;
+        }
+
+        void LogShown(RoomViewSnapshot s, int roomsIn, int roomsNew, int roomsOut, int doorsIn, int doorsNew, int doorsOut)
+        {
             var sb = new StringBuilder();
             sb.Append($"[3D 방] 현재 {s.Center} ({StatusText.Korean(s.Status)})");
             sb.Append($"\n활성 방 {rooms.Count}개: {string.Join(" ", rooms.Keys.OrderBy(p => p))}");
@@ -203,26 +253,114 @@ namespace WordRoom.World
             Debug.Log(sb.ToString());
         }
 
-        /// <summary>The shown room instance at p (e.g. to put the player on its floor); false when it is not shown.</summary>
+        /// <summary>The shown room instance at p (e.g. to put the player on its floor); false when it is not shown or not usable.</summary>
         public bool TryGetShownRoom(GridPos p, out Transform room)
         {
-            room = rooms.TryGetValue(p, out var v) && v != null ? v.transform : null;
+            room = IsShownUsable(p) ? rooms[p].transform : null;
             return room != null;
         }
 
+        bool IsShownUsable(GridPos p) => rooms.TryGetValue(p, out var v) && v != null && v.IsUsable(p);
+
         /// <summary>
-        /// Boundary for the later door step: stores the state of a connection and applies it immediately to its
-        /// shown door, if any (no animation). Nothing calls this yet.
+        /// Stores the state of a connection and applies it immediately to its shown door, if any (no animation).
+        /// The player's door opening uses OpenDoor instead.
         /// </summary>
         public void SetDoorState(RoomConnection id, DoorState state)
         {
             doorStates.Set(id, state);
             if (doors.TryGetValue(id, out var door) && door != null) door.Apply(state, openLift);
+            UpdatePassages();
+        }
+
+        /// <summary>
+        /// Whether `door` (e.g. the one the player aims at) may be opened: it is the shown door of a closed connection
+        /// between the current room and a shown room. Doors toward 미생성 or hidden rooms, and doors of neighbor rooms
+        /// that do not touch the current room, cannot be opened.
+        /// </summary>
+        public bool CanOpen(DoorView door, out RoomConnection id)
+        {
+            id = default;
+            if (!ready || center == null || door == null || !door.Bound) return false;
+            id = door.Connection;
+            return doors.TryGetValue(id, out var shown) && shown == door && door.State == DoorState.Closed &&
+                   JoinsCurrentToShown(id, center.Value);
+        }
+
+        /// <summary>
+        /// Opens a door that CanOpen allows: the connection is stored Open now (so a door returned to the pool while
+        /// sliding comes back fully open) and the shown door starts sliding up. False (nothing changes) otherwise.
+        /// Opening never creates rooms, moves the logical position or counts a visit.
+        /// </summary>
+        public bool OpenDoor(RoomConnection id)
+        {
+            if (!doors.TryGetValue(id, out var door) || !CanOpen(door, out _)) return false;
+            doorStates.Set(id, DoorState.Open);
+            door.BeginOpening(openLift, openSeconds);
+            UpdatePassages();
+            return true;
+        }
+
+        /// <summary>
+        /// Whether the player's center, moving from `from` to `to` in this frame, went EntryDepth (0.15m) past the
+        /// boundary between the current room and a neighbor through a passable doorway (door fully open, both rooms
+        /// shown, crossing point within the doorway width). Uses the spacing, origin and door placement fixed for
+        /// this experiment; works the same on every side and for negative coordinates. Only a frame that crosses the
+        /// depth counts, so standing on the threshold or swaying around it never reports twice, and after the
+        /// current room changes the way back needs EntryDepth past the boundary on the other side again.
+        /// </summary>
+        public bool TryDetectEntry(Vector3 from, Vector3 to, out Direction side)
+        {
+            side = default;
+            if (!ready || center == null) return false;
+            var c = center.Value;
+            var half = spacing * 0.5f;
+            var co = RoomOrigin(c);
+            foreach (var d in Directions.GenerationOrder)
+            {
+                var n = RoomPrefabLayout.Normal(d);
+                var depthFrom = Vector3.Dot(from - co, n) - half;
+                var depthTo = Vector3.Dot(to - co, n) - half;
+                if (depthFrom >= EntryDepth || depthTo < EntryDepth) continue;   // did not cross the entry depth outward
+                var id = RoomConnection.Of(c, d);
+                if (!IsPassable(id, c)) continue;
+                var crossing = Vector3.Lerp(from, to, (EntryDepth - depthFrom) / (depthTo - depthFrom));
+                var t = RoomPrefabLayout.Tangent(d);
+                var doorway = RoomOrigin(id.Anchor) + layout.Pose(id.AnchorSide).BodyCenter;
+                if (Mathf.Abs(Vector3.Dot(crossing - doorway, t)) > doorwayHalfWidth) continue;
+                side = d;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>Door fully open and joining the current room `c` to another shown room.</summary>
+        bool IsPassable(RoomConnection id, GridPos c) =>
+            doors.TryGetValue(id, out var door) && door != null && door.FullyOpen && JoinsCurrentToShown(id, c);
+
+        bool JoinsCurrentToShown(RoomConnection id, GridPos c)
+        {
+            if (id.A != c && id.B != c) return false;
+            var other = id.A == c ? id.B : id.A;
+            return IsShownUsable(c) && IsShownUsable(other);
+        }
+
+        /// <summary>Passage blocks: off only where passing is allowed now (see IsPassable); on everywhere else.</summary>
+        void UpdatePassages()
+        {
+            foreach (var kv in doors)
+                if (kv.Value != null) kv.Value.SetPassable(center != null && IsPassable(kv.Key, center.Value));
+        }
+
+        void Update()
+        {
+            if (ready && center != null) UpdatePassages();   // a door that finished sliding opens its passage
         }
 
         void OnDestroy()
         {
             ready = false;
+            center = null;
             rooms.Clear();
             doors.Clear();
             doorStates.Clear();

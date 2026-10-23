@@ -131,6 +131,7 @@ GameObject:
   - component: {fileID: 80028689}
   - component: {fileID: 80028688}
   - component: {fileID: 80028691}
+  - component: {fileID: 80028692}
   m_Layer: 0
   m_Name: RoomGenerationDebug
   m_TagString: Untagged
@@ -168,6 +169,7 @@ MonoBehaviour:
   verboseLog: 1
   worldView: {fileID: 80028691}
   player: {fileID: 1914820004}
+  hint: {fileID: 80028692}
 --- !u!114 &80028689
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -221,6 +223,7 @@ MonoBehaviour:
   doorBodyName: Door
   doorOffset: {x: 0, y: 0, z: 0}
   doorOpenLift: 0
+  doorOpenSeconds: 0.5
   worldOrigin: {x: 0, y: 0, z: 0}
   roomSpacing: 0
   roomRoot: {fileID: 0}
@@ -230,6 +233,21 @@ MonoBehaviour:
   cameraOffset: {x: 0, y: 16, z: 0}
   cameraEuler: {x: 90, y: 0, z: 0}
   verbosePoolLog: 1
+--- !u!114 &80028692
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 80028687}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 501cae595468d5b08b0e77e5d432c79b, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: WordRoom.World::WordRoom.World.PlayHint
+  font: {fileID: 11400000, guid: 52be4e75225fdda49b530d9775753c59, type: 2}
+  fontSize: 30
+  offset: {x: 0, y: -90}
 --- !u!1 &1232969872
 GameObject:
   m_ObjectHideFlags: 0
@@ -551,6 +569,8 @@ MonoBehaviour:
   moveSpeed: 3
   lookSensitivity: 0.1
   pitchLimit: 85
+  viewHomeSaved: 1
+  viewHomeLocalPosition: {x: 0, y: 1.6, z: 0}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

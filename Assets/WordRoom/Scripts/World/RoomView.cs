@@ -62,6 +62,9 @@ namespace WordRoom.World
             transform.localScale = scale;
         }
 
+        /// <summary>Bound to `p` and active in the scene (call only on a live instance).</summary>
+        internal bool IsUsable(GridPos p) => Bound && Position == p && gameObject.activeInHierarchy;
+
         /// <summary>Neighbor words indexed by Direction (null = 미생성). Missing sign texts are skipped.</summary>
         internal void SetSigns(IReadOnlyList<string> words)
         {

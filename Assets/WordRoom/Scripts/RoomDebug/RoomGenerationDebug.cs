@@ -20,12 +20,17 @@ namespace WordRoom.RoomDebug
 
     /// <summary>
     /// Debug-only check of the room generator: Inspector settings, arrow keys (↑ 상, ↓ 하, ← 좌, → 우) and Console
-    /// output. No UI, map or network. Generation runs on a worker thread; input is ignored (not queued)
-    /// while data is loading or a request is running. The settings are copied when an experiment starts.
+    /// output. No map or network; the only UI is the optional one-line PlayHint in player mode. Generation runs on
+    /// a worker thread; input is ignored (not queued) while data is loading or a request is running. The settings
+    /// are copied when an experiment starts.
     /// Optional 3D view (RoomWorldView): after each finished request a snapshot of the current room and its
     /// existing neighbors is taken on the worker and shown on the main thread; without it only Console output.
-    /// Optional first-person player: placed on the start room floor once it is shown; while it is set, the arrow
-    /// keys do not move the logical position and the debug camera is not moved.
+    /// Optional first-person player: placed on the start room floor once it is shown; while it is set and active,
+    /// the arrow keys do not move the logical position and the debug camera is not moved (one rule, ActivePlayer,
+    /// for placement, input, arrow keys and camera). The player opens doors of the current room with E and enters a
+    /// neighbor by walking through an open doorway; each entry is one generator Move (on the worker), and walking
+    /// stays locked until the new surroundings are shown and the player stands on the arrival floor. A player that
+    /// is disconnected, replaced or disabled is stopped and only placed again by a new experiment.
     /// </summary>
     [RequireComponent(typeof(WordRoomDataService))]
     public sealed class RoomGenerationDebug : MonoBehaviour
@@ -64,8 +69,12 @@ namespace WordRoom.RoomDebug
         [SerializeField] RoomWorldView worldView;
 
         [Header("1인칭 (선택)")]
-        [Tooltip("연결하면 시작 방 표시 후 이 플레이어를 시작 방 바닥에 배치하고, 확인용 카메라 자동 이동과 방향키 논리 이동을 하지 않습니다. 비우면 기존 방향키·확인용 카메라 디버그.")]
+        [Tooltip("연결하고 활성이면 시작 방 표시 후 이 플레이어를 시작 방 바닥에 배치하고, 확인용 카메라 자동 이동과 방향키 논리 이동을 하지 않습니다. 비우거나 비활성이면 기존 방향키·확인용 카메라 디버그. 실행 중 해제·교체·비활성화하면 이전 플레이어를 정지하고, 다시 배치는 새 실험에서 합니다.")]
         [SerializeField] FirstPersonPlayer player;
+        [Tooltip("화면 안내(문 열기·목표 도달·실험 종료·진행 정지·재배치 필요). 진행 중 자막은 없습니다. 비우면 같은 오브젝트의 것을 찾고, 없으면 안내 없이 진행합니다.")]
+        [SerializeField] PlayHint hint;
+
+        const float DoorReach = 2f;          // E reaches doors up to this far from the eye along the screen center
 
         WordRoomDataService service;
         RoomGenerator generator;
@@ -73,11 +82,27 @@ namespace WordRoom.RoomDebug
         CancellationTokenSource cts;
         bool busy;
         bool waitingLogged;
+        bool hintMissingLogged;
+
+        // First-person play of the current experiment (main thread only).
+        FirstPersonPlayer controlled;        // the player placed for this experiment; null = nobody walks
+        string status;                       // experiment status from the last finished request (copied there)
+        string halt;                         // why play stopped after an error; null = not stopped
+        Vector3 lastPosition;                // player position at the previous entry check
+
+        /// <summary>The connected player when its component and object are active; null = arrow-key/camera debug.</summary>
+        FirstPersonPlayer ActivePlayer => player != null && player.isActiveAndEnabled ? player : null;
+
+        /// <summary>Stop reason and what to do, kept on screen until the next new experiment; null when not stopped.</summary>
+        // The hint font (Pretendard-Black SDF, static atlas) has no '·', which the reasons may contain.
+        string HaltHint => halt != null ? $"진행 정지: {halt.Replace("·", ", ")}\n새 실험을 시작하세요" : null;
 
         void Awake()
         {
             service = GetComponent<WordRoomDataService>();
             if (worldView == null) worldView = GetComponent<RoomWorldView>();
+            if (hint == null) hint = GetComponent<PlayHint>();
+            if (player != null) player.RememberViewHome();   // also for an inactive player, before any debug camera move
         }
 
         void OnEnable()
@@ -90,6 +115,8 @@ namespace WordRoom.RoomDebug
         {
             if (service != null) service.StateChanged -= OnDataState;
             cts?.Cancel();          // results of running work are discarded (see the token checks after await)
+            ReleaseControlled();    // nobody checks room entries now; enabling again does not resume this player
+            SetHint(null);
         }
 
         void Start()
@@ -161,7 +188,14 @@ namespace WordRoom.RoomDebug
             generator = null;
             dataset = d;
             var view = worldView != null;
-            if (player != null) player.Suspend();                 // no walking or falling until the new start room is shown
+            // Kept by reference: a failed start releases exactly these (cursor too), even after `controlled` is cleared.
+            var stoppedControlled = controlled;
+            var stoppedPlayer = player;
+            if (stoppedControlled != null) stoppedControlled.Suspend();   // no walking or falling until the new start room is shown
+            if (stoppedPlayer != null) stoppedPlayer.Suspend();
+            controlled = null;
+            status = null;
+            halt = null;
             if (view) ViewCall(() => worldView.BeginSession());   // previous rooms/doors back to the pools, door states cleared
             Debug.Log($"[방 생성] 새 실험 준비: {d.GetWord(start)} → {d.GetWord(target)} · {config}" +
                       (config.TargetGuidance ? " · 목표 근접도 계산 중" : ""));
@@ -175,20 +209,25 @@ namespace WordRoom.RoomDebug
                 }, token);
                 if (this == null || token.IsCancellationRequested) return;
                 generator = gen;
+                status = update.Status;
                 LogUpdate(update);
-                ShowView(snapshot);
-                PlacePlayer(snapshot);
+                var shown = ShowView(snapshot, out var showFailure);
+                var placeFailure = PlacePlayer(snapshot, shown, showFailure);
+                if (placeFailure != null) FailStart($"시작 위치 배치 실패 — {placeFailure}", stoppedControlled, stoppedPlayer, ActivePlayer);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
+                // normal cancel (disabled, destroyed or replaced): not an error, and nothing of this request is applied
             }
             catch (ArgumentException e)
             {
                 Debug.LogError($"[방 생성] 실험을 시작할 수 없습니다: {e.Message}");
+                if (this != null && !token.IsCancellationRequested) FailStart($"실험을 시작할 수 없습니다 — {e.Message}", stoppedControlled, stoppedPlayer, ActivePlayer);
             }
             catch (Exception e)
             {
                 Debug.LogException(e);
+                if (this != null && !token.IsCancellationRequested) FailStart("실험 시작 중 오류가 났습니다(Console 확인)", stoppedControlled, stoppedPlayer, ActivePlayer);
             }
             finally
             {
@@ -196,15 +235,34 @@ namespace WordRoom.RoomDebug
             }
         }
 
+        /// <summary>
+        /// The new experiment cannot be played: play stays stopped with the reason on screen until the next new
+        /// experiment, which recovers once the settings are fixed. The given players (those stopped for this start
+        /// and the one connected now; destroyed ones are skipped) stay stopped and the cursor is released even when
+        /// none of them is alive any more. Only called for the current request (checked by the caller).
+        /// </summary>
+        void FailStart(string reason, params FirstPersonPlayer[] stopped)
+        {
+            halt = reason;
+            controlled = null;
+            foreach (var p in stopped)
+                if (p != null) p.Release();
+            FirstPersonPlayer.ReleaseCursor();
+        }
+
         void Update()
         {
+            TrackPlayer();
             var direction = ReadDirection();
-            if (direction == null) return;
-            if (player != null)
+            if (ActivePlayer != null)
             {
-                Debug.Log("[방 생성] 1인칭 플레이어가 연결되어 방향키 논리 이동을 하지 않습니다(플레이어 위치와 지도 위치 불일치 방지). 방향키 디버그는 Player 칸을 비우고 사용하세요.");
+                if (direction != null)
+                    Debug.Log("[방 생성] 1인칭 플레이어가 연결되어 방향키 논리 이동을 하지 않습니다(플레이어 위치와 지도 위치 불일치 방지). 방향키 디버그는 Player 칸을 비우고 사용하세요.");
+                UpdatePlay();
                 return;
             }
+            SetHint(HaltHint);                // debug mode: only a stop reason stays on screen
+            if (direction == null) return;
             if (busy || generator == null)
             {
                 if (verboseLog) Debug.Log("[방 생성] 로딩·생성 중이라 입력을 무시했습니다 (입력은 쌓아두지 않음).");
@@ -264,8 +322,9 @@ namespace WordRoom.RoomDebug
                 if (update == null) Debug.Log($"[방 생성] 이동 불가: {refusal}");     // refused: the 3D view is not moved
                 else
                 {
+                    status = update.Status;
                     LogUpdate(update);
-                    ShowView(snapshot);
+                    ShowView(snapshot, out _);      // Console debug: an incomplete view is logged by the view itself
                 }
             }
             catch (OperationCanceledException)
@@ -281,32 +340,217 @@ namespace WordRoom.RoomDebug
             }
         }
 
+        // ---- first-person play ------------------------------------------------------------------------------
+        /// <summary>
+        /// A placed player that is no longer the connected, active one (field cleared or replaced, component or
+        /// object disabled, destroyed) is stopped and the cursor released, so it never moves alongside the arrow
+        /// keys or the debug camera. Only a new experiment places a player again.
+        /// </summary>
+        void TrackPlayer()
+        {
+            if (ReferenceEquals(controlled, null)) return;
+            // Placed is false after a disable/enable within one frame (OnDisable dropped the placement) and after Halt.
+            if (controlled != null && controlled == player && controlled.isActiveAndEnabled && (controlled.Placed || halt != null)) return;
+            ReleaseControlled();
+            Debug.Log("[1인칭] 플레이어 연결이 해제·교체되었거나 비활성화되어 이전 플레이어를 정지하고 커서를 해제했습니다. 연결된 플레이어는 새 실험에서 배치합니다.");
+        }
+
+        void ReleaseControlled()
+        {
+            if (controlled != null) controlled.Release();
+            controlled = null;
+        }
+
+        /// <summary>
+        /// Player mode, once per frame: the hint for the current state and, while exploring, the door under the
+        /// screen center (E opens it once; holding, repeating or pressing during the slide adds nothing). There is
+        /// no progress caption: while a door slides or a request runs nothing is shown, and an earlier prompt goes.
+        /// </summary>
+        void UpdatePlay()
+        {
+            if (halt != null)
+            {
+                SetHint(HaltHint);
+                return;
+            }
+            if (busy)
+            {
+                SetHint(null);                // start or entry request running: no caption, no "not placed"
+                return;
+            }
+            if (controlled == null)
+            {
+                SetHint(generator != null ? "플레이어가 배치되지 않았습니다\n새 실험을 시작하세요" : null);
+                return;
+            }
+            if (status != "running")
+            {
+                SetHint(status == "success" ? "목표 도달" : $"실험 종료: {StatusText.Korean(status)}");
+                return;
+            }
+            string text = null;
+            if (worldView != null && controlled.HasControlFocus && controlled.TryGetAimedDoor(DoorReach, out var door) && worldView.CanOpen(door, out var id))
+            {
+                if (!(controlled.InteractPressed && worldView.OpenDoor(id))) text = "[E] 문 열기";   // opened: prompt cleared
+            }
+            SetHint(text);
+        }
+
+        /// <summary>
+        /// After every Update (the player has moved): one entry at most, when the player's path in this frame went
+        /// 0.15m past the boundary of the current room through a passable doorway.
+        /// </summary>
+        void LateUpdate()
+        {
+            if (controlled == null || busy || halt != null || status != "running" || worldView == null) return;
+            if (controlled != player || !controlled.Placed) return;                // TrackPlayer releases it next frame
+            var to = controlled.transform.position;
+            var from = lastPosition;
+            lastPosition = to;
+            if (worldView.TryDetectEntry(from, to, out var side)) EnterRoom(side);
+        }
+
+        /// <summary>
+        /// Entered the neighbor on `side`: walking and door use stop at once (look, gravity and Escape go on), one
+        /// generator Move runs on the worker with the snapshot taken there, the main thread shows the result, and
+        /// walking resumes where the player stands (no re-placement) once the arrival room is shown under the
+        /// player. A refused move, a failed display or an error stops play instead; nothing is undone or retried.
+        /// A result arriving after a new experiment, disabling or a player change never gives control back.
+        /// </summary>
+        async void EnterRoom(Direction side)
+        {
+            var p = controlled;
+            p.SetMovementLocked(true);
+            busy = true;
+            SetHint(null);                                                         // no caption while waiting
+            var token = cts.Token;
+            var gen = generator;
+            var d = dataset;
+            var view = worldView != null;
+            try
+            {
+                var (update, refusal, snapshot) = await Task.Run(() =>
+                {
+                    var u = gen.Move(side, out var r, token);
+                    return (u, r, view && u != null ? RoomViewSnapshot.Capture(gen.Map, d.GetWord) : null);
+                }, token);
+                if (this == null || token.IsCancellationRequested || gen != generator) return;   // stale result
+                if (update == null)
+                {
+                    Halt($"{Directions.Korean(side)} 방 입장이 거절되었습니다 — {refusal}");
+                    return;
+                }
+                status = update.Status;
+                LogUpdate(update);
+                var shown = ShowView(snapshot, out var showFailure);
+                if (controlled != p) return;                                       // released meanwhile
+                string failure = null;
+                if (!shown) failure = $"주변 방 표시 준비 실패 — {showFailure}";
+                else if (!worldView.TryGetShownRoom(snapshot.Center, out var room)) failure = $"도착 방 {snapshot.Center}이 3D로 표시되지 않았습니다";
+                else p.IsOnFloorOf(room, out failure);
+                if (failure != null)
+                {
+                    Halt(failure);
+                    return;
+                }
+                lastPosition = p.transform.position;
+                p.SetMovementLocked(status != "running");                          // finished: look and Escape only
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                if (this != null && gen == generator) Halt("입장 처리 중 오류가 났습니다(Console 확인)");
+            }
+            finally
+            {
+                busy = false;
+            }
+        }
+
+        /// <summary>
+        /// Physical and logical position can no longer be trusted to match: the player stops completely (no
+        /// walking, falling or door use; Escape still releases the cursor) until a new experiment.
+        /// </summary>
+        void Halt(string reason)
+        {
+            halt = reason;
+            if (controlled != null) controlled.Suspend();
+            Debug.LogError($"[1인칭] 진행 정지 — 이동·문 열기를 멈춥니다. 새 실험을 시작하세요: {reason}");
+        }
+
+        void SetHint(string text)
+        {
+            if (hint != null) hint.Set(text);
+            else if (!string.IsNullOrEmpty(text) && !hintMissingLogged)
+            {
+                hintMissingLogged = true;
+                Debug.LogWarning("[안내] PlayHint가 없어 화면 안내를 표시하지 않습니다(플레이는 계속). RoomGenerationDebug 오브젝트에 PlayHint를 추가하세요.");
+            }
+        }
+
         // ---- 3D view (optional; its failures never stop generation or Console output) -----------------------
-        void ShowView(RoomViewSnapshot snapshot)
+        /// <summary>
+        /// True only when the view reports every needed room, door and passage block usable (see RoomWorldView.Show);
+        /// "no exception" alone is not success. False with the reason when there is no view or snapshot, the view
+        /// is not ready, something is missing, or the update threw.
+        /// </summary>
+        bool ShowView(RoomViewSnapshot snapshot, out string failure)
         {
-            if (snapshot != null && worldView != null) ViewCall(() => worldView.Show(snapshot, player == null));
+            if (worldView == null || snapshot == null)
+            {
+                failure = "RoomWorldView가 없어 3D로 표시하지 않았습니다";
+                return false;
+            }
+            if (player != null) player.RememberViewHome();     // before the debug camera (maybe its view) can move
+            var complete = false;
+            string reason = null;
+            if (!ViewCall(() => complete = worldView.Show(snapshot, ActivePlayer == null, out reason)))
+                reason = "3D 표시 갱신 중 오류가 났습니다(Console 확인)";
+            failure = complete ? null : reason;
+            return complete;
         }
 
-        /// <summary>After the start room is shown: puts the player on its floor, or reports why it stays stopped.</summary>
-        void PlacePlayer(RoomViewSnapshot snapshot)
+        /// <summary>
+        /// After the start room is shown: puts the player that is connected and active now on its floor. Returns
+        /// null when placed or when no active player is connected (arrow-key/Console debug; an inactive player is
+        /// never placed and the cursor is not locked for it), otherwise why play cannot start.
+        /// </summary>
+        string PlacePlayer(RoomViewSnapshot snapshot, bool shown, string showFailure)
         {
-            if (player == null) return;
+            var p = ActivePlayer;
+            if (p == null)
+            {
+                if (player != null) Debug.LogWarning("[1인칭] 연결된 플레이어가 비활성이라 배치하지 않습니다. 활성화한 뒤 새 실험을 시작하세요.");
+                return null;
+            }
             string failure;
-            if (worldView == null || snapshot == null) failure = "RoomWorldView가 없어 시작 방을 3D로 표시하지 않았습니다";
+            if (!shown) failure = showFailure ?? "시작 방을 3D로 표시하지 못했습니다";
             else if (!worldView.TryGetShownRoom(snapshot.Center, out var room)) failure = "시작 방이 3D로 표시되지 않았습니다(위 [3D 방] 오류 확인)";
-            else if (player.PlaceAt(room, out failure)) return;
+            else if (p.PlaceAt(room, out failure))
+            {
+                controlled = p;
+                lastPosition = p.transform.position;
+                p.SetMovementLocked(status != "running");                          // e.g. no exit around the start room
+                return null;
+            }
             Debug.LogError($"[1인칭] 시작 위치 배치 실패 — 이동하지 않습니다(단어 생성·Console 디버그는 계속): {failure}");
+            return failure;
         }
 
-        static void ViewCall(Action action)
+        static bool ViewCall(Action action)
         {
             try
             {
                 action();
+                return true;
             }
             catch (Exception e)
             {
                 Debug.LogError($"[3D 방] 표시 갱신 실패(단어 생성은 계속): {e}");
+                return false;
             }
         }
 
