@@ -12,7 +12,8 @@ namespace WordRoom.Generation
     /// <summary>
     /// Port of kw_semantic_engine.Simulation 1.1.0 (generation and moves, without the automatic player).
     /// Rooms are surfaces; every neighbor needs its own directly approved sense pair (B rule, no transitivity).
-    /// The empty neighbors of the room the player stands in are planned together: relation DB with the threshold
+    /// The empty neighbors of one room (the one moved into, or with Prepare the one behind an opened door, before
+    /// Enter moves into it) are planned together: relation DB with the threshold
     /// ladder (backtracking within placement_budget per step), then the fastText supplement. Committed rooms never
     /// change. Requests are serialized; all reads come from WordRoomDataset (no second data load).
     /// Python names are given in the comments of each method.
@@ -135,15 +136,77 @@ namespace WordRoom.Generation
                               (Map.IsUnfilled(Map.Position) ? " (이 방의 주변 생성이 완성되지 못한 위치)" : "");
                     return null;
                 }
-                var from = Map.Position;
-                var fresh = Map.Enter(dest);
-                if (word == Map.Target) Map.Status = "success";
-                else if (cfg.UseMoveLimit && Map.Moves >= cfg.MaxMoves) Map.Status = "move_limit";   // test-only; normal play has no limit
-                var update = new GenerationUpdate { Kind = "move", From = from, To = dest, Moved = true, FirstVisit = fresh };
+                var update = EnterRoom(dest, word, "move");
                 update.Fill = Fill(dest);       // also for the target room (1.1.0: arrival is kept, neighbors filled anyway)
                 Finish(update);
                 return update;
             }
+        }
+
+        /// <summary>
+        /// Fills the empty neighbors of the existing room adjacent on `direction` (opening its door), with the same
+        /// Fill as a move, without entering it: position, moves, visits, path and status stay as they are, so the
+        /// guidance progress is the recorded one. Newly committed rooms update the recent words as in any fill.
+        /// Afterwards the room counts as prepared (IsPrepared), also when some neighbors stay 미생성 — the report
+        /// tells them apart (Complete, Empty, skipped_same_state). Returns null with the reason when not possible.
+        /// </summary>
+        public GenerationUpdate Prepare(Direction direction, out string refusal, CancellationToken token = default)
+        {
+            lock (gate)
+            {
+                cancel = token;
+                if (!CheckNeighbor(direction, out var dest, out _, out refusal)) return null;
+                var update = new GenerationUpdate { Kind = "prepare", From = Map.Position, To = dest, Moved = false, FirstVisit = !Map.IsVisited(dest) };
+                update.Fill = Fill(dest);
+                Finish(update);
+                return update;
+            }
+        }
+
+        /// <summary>
+        /// Enters the prepared room adjacent on `direction`: the move part of Move (Map.Enter, target arrival, test
+        /// move limit) without filling again — its neighbors were filled when it was prepared. Fill is null in the
+        /// result. Returns null with the reason when not possible, also for a room that was never prepared.
+        /// </summary>
+        public GenerationUpdate Enter(Direction direction, out string refusal, CancellationToken token = default)
+        {
+            lock (gate)
+            {
+                cancel = token;
+                if (!CheckNeighbor(direction, out var dest, out var word, out refusal)) return null;
+                if (!Map.IsPrepared(dest))
+                {
+                    refusal = $"{Directions.Korean(direction)} 방향 {dest}은 주변 준비 전이라 입장할 수 없습니다.";
+                    return null;
+                }
+                var update = EnterRoom(dest, word, "enter");
+                Finish(update);
+                return update;
+            }
+        }
+
+        /// <summary>Started, running and an existing room next to the current one on `direction`.</summary>
+        bool CheckNeighbor(Direction direction, out GridPos dest, out int word, out string refusal)
+        {
+            refusal = null;
+            dest = Map.Position.Add(Directions.Offset(direction));
+            word = -1;
+            if (!Started) refusal = "실험이 아직 시작되지 않았습니다.";
+            else if (Map.Status != "running") refusal = $"실험이 끝났습니다 ({StatusText.Korean(Map.Status)}).";
+            else if (!Map.TryGetWord(dest, out word))
+                refusal = $"{Directions.Korean(direction)} 방향 {dest}은 미생성 좌표라 이동할 수 없습니다." +
+                          (Map.IsUnfilled(Map.Position) ? " (이 방의 주변 생성이 완성되지 못한 위치)" : "");
+            return refusal == null;
+        }
+
+        /// <summary>Simulation.step without the fill: pos, moves, visits, path, then target arrival and the test move limit.</summary>
+        GenerationUpdate EnterRoom(GridPos dest, int word, string kind)
+        {
+            var from = Map.Position;
+            var fresh = Map.Enter(dest);
+            if (word == Map.Target) Map.Status = "success";
+            else if (cfg.UseMoveLimit && Map.Moves >= cfg.MaxMoves) Map.Status = "move_limit";   // test-only; normal play has no limit
+            return new GenerationUpdate { Kind = kind, From = from, To = dest, Moved = true, FirstVisit = fresh };
         }
 
         void Finish(GenerationUpdate u)
@@ -915,8 +978,16 @@ namespace WordRoom.Generation
         /// <summary>
         /// Simulation.fill: relation DB with the threshold ladder, then the fastText supplement. A failure leaves the
         /// move in place and is recorded; the same room is retried only after the map has changed (room count).
+        /// A processed request (also partial or skipped) marks the center as prepared.
         /// </summary>
         FillReport Fill(GridPos center)
+        {
+            var report = FillAround(center);
+            Map.MarkPrepared(center);
+            return report;
+        }
+
+        FillReport FillAround(GridPos center)
         {
             var report = new FillReport { Center = center };
             var needed = Directions.Around(center).Where(q => !Map.HasRoom(q)).ToList();

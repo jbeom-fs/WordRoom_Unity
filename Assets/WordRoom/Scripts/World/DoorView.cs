@@ -43,6 +43,12 @@ namespace WordRoom.World
         /// <summary>Open and at its exact end position, colliders off.</summary>
         public bool FullyOpen => state == DoorState.Open && !opening;
 
+        /// <summary>
+        /// Bound, and this component and its object active, so Update runs and an opening can finish. A disabled
+        /// component never counts as ready, openable or passable (call only on a live instance).
+        /// </summary>
+        internal bool Active => Bound && isActiveAndEnabled;
+
         /// <summary>Called once after Instantiate. Throws InvalidOperationException when the body is missing.</summary>
         internal void Init(string bodyName)
         {
@@ -111,11 +117,12 @@ namespace WordRoom.World
 
         /// <summary>
         /// Starts sliding a closed door up over `seconds` (0 or less = at once). The state becomes Open now; the
-        /// colliders stay as closed until the end position is reached. False when not bound or not closed.
+        /// colliders stay as closed until the end position is reached. False (nothing changes) when not Active or
+        /// not closed.
         /// </summary>
         internal bool BeginOpening(float openLift, float seconds)
         {
-            if (!Bound || state != DoorState.Closed) return false;
+            if (!Active || state != DoorState.Closed) return false;
             if (seconds <= 0f)
             {
                 Apply(DoorState.Open, openLift);
@@ -130,11 +137,11 @@ namespace WordRoom.World
         }
 
         /// <summary>
-        /// Bound to `id`, active in the scene, body present and the passage block present, active and in the wanted
-        /// state (off only when `passable`). Call only on a live instance.
+        /// Active and bound to `id`, body present and the passage block present, active and in the wanted state
+        /// (off only when `passable`). Call only on a live instance.
         /// </summary>
         internal bool IsReady(RoomConnection id, bool passable) =>
-            Bound && Connection == id && gameObject.activeInHierarchy && body != null &&
+            Active && Connection == id && body != null &&
             passageBlock != null && passageBlock.gameObject.activeInHierarchy && passageBlock.enabled == !passable;
 
         /// <summary>Passage block off (passing allowed) or on. Independent of the door state and its colliders.</summary>

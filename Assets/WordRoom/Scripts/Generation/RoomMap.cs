@@ -16,6 +16,7 @@ namespace WordRoom.Generation
         readonly List<int> recent = new List<int>();
         readonly int recentWindow;
         readonly Dictionary<GridPos, PlacedRoom> roomInfo = new Dictionary<GridPos, PlacedRoom>();
+        readonly HashSet<GridPos> prepared = new HashSet<GridPos>();
         internal readonly Dictionary<GridPos, UnfilledRecord> Unfilled = new Dictionary<GridPos, UnfilledRecord>();
 
         public int Start { get; }
@@ -50,6 +51,14 @@ namespace WordRoom.Generation
         public bool IsVisited(GridPos p) => visits.ContainsKey(p);
         public PlacedRoom GetRoomInfo(GridPos p) => roomInfo.TryGetValue(p, out var r) ? r : null;
         public bool IsUnfilled(GridPos p) => Unfilled.ContainsKey(p);
+
+        /// <summary>
+        /// A fill request around p has been processed (start room, a room moved into, or a room prepared through a
+        /// door). Processed is not complete: some neighbors may have stayed 미생성 (see IsUnfilled).
+        /// </summary>
+        public bool IsPrepared(GridPos p) => prepared.Contains(p);
+
+        internal void MarkPrepared(GridPos p) => prepared.Add(p);
 
         /// <summary>Recorded reason why `position` around `center` was left empty, or null.</summary>
         public string EmptyReason(GridPos center, GridPos position)

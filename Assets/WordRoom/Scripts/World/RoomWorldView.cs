@@ -16,10 +16,11 @@ namespace WordRoom.World
     /// connection, apart from the door instances. Each update also writes the snapshot's neighbor words to the wall
     /// signs of every shown room. Main thread only.
     /// Doors and passing are separate: a door of the current room toward a shown room can be opened (stored Open,
-    /// then slid up); a doorway lets the player through only while its door is fully open and it joins the current
-    /// room (the center of the last shown snapshot) to another shown room — every other doorway keeps its passage
-    /// block on, also for open doors toward rooms outside the shown set. TryDetectEntry tells when the player has
-    /// passed such a doorway; moving the logical position is up to the caller (through the generator request).
+    /// then slid up; the caller prepares the neighbors of the room behind it at the same time); a doorway lets the
+    /// player through only while its door is fully open and it joins the current room (the center of the last shown
+    /// snapshot) to another shown room that snapshot reports prepared — every other doorway keeps its passage block
+    /// on, also for open doors toward rooms outside the shown set or still being prepared. TryDetectEntry tells when
+    /// the player has passed such a doorway; moving the logical position is up to the caller (generator request).
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class RoomWorldView : MonoBehaviour
@@ -89,6 +90,7 @@ namespace WordRoom.World
         float doorwayHalfWidth;
         bool ready;
         GridPos? center;                      // current room of the last shown snapshot
+        RoomViewSnapshot shown;               // last shown snapshot: which shown rooms are prepared (map data, not pooled)
 
         // Roots this component created itself (never written to the Inspector fields), reused across experiments.
         Transform autoRoomRoot;
@@ -111,6 +113,7 @@ namespace WordRoom.World
             doorStates.Clear();
             ready = false;
             center = null;
+            shown = null;                                 // preparation info goes with the door states
             HandOverIfUserRoot(ref autoRoomRoot);         // before any cleanup or root resolving, also on a setting error
             HandOverIfUserRoot(ref autoDoorRoot);
 
@@ -217,6 +220,7 @@ namespace WordRoom.World
             foreach (var kv in rooms)                              // new and kept rooms: a new neighbor replaces 미생성
                 if (kv.Value != null && s.Signs.TryGetValue(kv.Key, out var words)) kv.Value.SetSigns(words);
             center = s.Center;
+            shown = s;
             UpdatePassages();
             var complete = CheckShown(wantRooms.Keys, wantDoors, out failure);
             if (!complete) Debug.LogError($"[3D 방] 표시 준비 실패 — {failure}");
@@ -281,22 +285,25 @@ namespace WordRoom.World
         public bool CanOpen(DoorView door, out RoomConnection id)
         {
             id = default;
-            if (!ready || center == null || door == null || !door.Bound) return false;
+            if (!ready || center == null || door == null || !door.Active) return false;   // a disabled DoorView never finishes opening
             id = door.Connection;
-            return doors.TryGetValue(id, out var shown) && shown == door && door.State == DoorState.Closed &&
+            return doors.TryGetValue(id, out var instance) && instance == door && door.State == DoorState.Closed &&
                    JoinsCurrentToShown(id, center.Value);
         }
 
         /// <summary>
-        /// Opens a door that CanOpen allows: the connection is stored Open now (so a door returned to the pool while
-        /// sliding comes back fully open) and the shown door starts sliding up. False (nothing changes) otherwise.
-        /// Opening never creates rooms, moves the logical position or counts a visit.
+        /// Opens a door that CanOpen allows: the shown door starts sliding up and the connection is stored Open (so a
+        /// door returned to the pool while sliding comes back fully open). `side` is the direction from the current
+        /// room to the room behind the door, for the caller's preparation request. False when refused — then nothing
+        /// is stored and nothing slides. Opening itself never creates rooms, moves the logical position or counts a visit.
         /// </summary>
-        public bool OpenDoor(RoomConnection id)
+        public bool OpenDoor(RoomConnection id, out Direction side)
         {
+            side = default;
             if (!doors.TryGetValue(id, out var door) || !CanOpen(door, out _)) return false;
+            if (!door.BeginOpening(openLift, openSeconds)) return false;
             doorStates.Set(id, DoorState.Open);
-            door.BeginOpening(openLift, openSeconds);
+            side = Directions.Between(center.Value, id.A == center.Value ? id.B : id.A).Value;
             UpdatePassages();
             return true;
         }
@@ -334,9 +341,14 @@ namespace WordRoom.World
             return false;
         }
 
-        /// <summary>Door fully open and joining the current room `c` to another shown room.</summary>
+        /// <summary>
+        /// Door active and fully open, joining the current room `c` to another shown room whose neighbors are prepared
+        /// in the last shown snapshot. Both conditions are needed: a finished slide alone or a finished preparation
+        /// alone never opens the passage (UpdatePassages runs every frame and follows this).
+        /// </summary>
         bool IsPassable(RoomConnection id, GridPos c) =>
-            doors.TryGetValue(id, out var door) && door != null && door.FullyOpen && JoinsCurrentToShown(id, c);
+            doors.TryGetValue(id, out var door) && door != null && door.Active && door.FullyOpen &&
+            JoinsCurrentToShown(id, c) && shown != null && shown.IsPrepared(id.A == c ? id.B : id.A);
 
         bool JoinsCurrentToShown(RoomConnection id, GridPos c)
         {
@@ -361,6 +373,7 @@ namespace WordRoom.World
         {
             ready = false;
             center = null;
+            shown = null;
             rooms.Clear();
             doors.Clear();
             doorStates.Clear();

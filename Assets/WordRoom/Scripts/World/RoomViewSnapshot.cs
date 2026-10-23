@@ -22,8 +22,12 @@ namespace WordRoom.World
         /// <summary>For each room in Rooms: the stored words of its neighbors, indexed by Direction; null = 미생성.</summary>
         public IReadOnlyDictionary<GridPos, string[]> Signs => signs;
 
+        /// <summary>A room in Rooms whose neighbors' fill request was processed (RoomMap.IsPrepared) when captured.</summary>
+        public bool IsPrepared(GridPos p) => prepared.Contains(p);
+
         readonly List<KeyValuePair<GridPos, int>> rooms = new List<KeyValuePair<GridPos, int>>(5);
         readonly Dictionary<GridPos, string[]> signs = new Dictionary<GridPos, string[]>(5);
+        readonly HashSet<GridPos> prepared = new HashSet<GridPos>();
 
         /// <param name="wordText">Surface of a word id (the dataset's existing lookup); called here, on the worker.</param>
         public static RoomViewSnapshot Capture(RoomMap map, Func<int, string> wordText)
@@ -41,6 +45,7 @@ namespace WordRoom.World
         void Add(RoomMap map, GridPos p, int word, Func<int, string> wordText)
         {
             rooms.Add(new KeyValuePair<GridPos, int>(p, word));
+            if (map.IsPrepared(p)) prepared.Add(p);
             var n = new string[4];
             foreach (var d in Directions.DisplayOrder)
                 n[(int)d] = map.TryGetWord(p.Add(Directions.Offset(d)), out var w) ? wordText(w) : null;

@@ -27,10 +27,12 @@ namespace WordRoom.RoomDebug
     /// existing neighbors is taken on the worker and shown on the main thread; without it only Console output.
     /// Optional first-person player: placed on the start room floor once it is shown; while it is set and active,
     /// the arrow keys do not move the logical position and the debug camera is not moved (one rule, ActivePlayer,
-    /// for placement, input, arrow keys and camera). The player opens doors of the current room with E and enters a
-    /// neighbor by walking through an open doorway; each entry is one generator Move (on the worker), and walking
-    /// stays locked until the new surroundings are shown and the player stands on the arrival floor. A player that
-    /// is disconnected, replaced or disabled is stopped and only placed again by a new experiment.
+    /// for placement, input, arrow keys and camera). The player opens doors of the current room with E: the door
+    /// slides up while one generator Prepare fills the neighbors of the room behind it (no move, no visit); the
+    /// doorway opens when both are done. Walking through it is one generator Enter (no fill), and walking stays
+    /// locked during each request until its result is shown (and, for an entry, the player stands on the arrival
+    /// floor). The arrow keys keep the combined Move. A player that is disconnected, replaced or disabled is
+    /// stopped and only placed again by a new experiment.
     /// </summary>
     [RequireComponent(typeof(WordRoomDataService))]
     public sealed class RoomGenerationDebug : MonoBehaviour
@@ -391,9 +393,69 @@ namespace WordRoom.RoomDebug
             string text = null;
             if (worldView != null && controlled.HasControlFocus && controlled.TryGetAimedDoor(DoorReach, out var door) && worldView.CanOpen(door, out var id))
             {
-                if (!(controlled.InteractPressed && worldView.OpenDoor(id))) text = "[E] 문 열기";   // opened: prompt cleared
+                if (controlled.InteractPressed && worldView.OpenDoor(id, out var side)) PrepareRoom(side);   // slide and fill start together; prompt cleared
+                else text = "[E] 문 열기";
             }
             SetHint(text);
+        }
+
+        /// <summary>
+        /// The door toward `side` was just opened (its slide has started): in the same frame one generator Prepare
+        /// fills the empty neighbors of the room behind it on the worker, with the snapshot taken there. The current
+        /// room, moves, visits and status do not change. Walking and door use are locked meanwhile (look, gravity and
+        /// Escape go on); no other request is accepted or queued. The main thread then shows the result still
+        /// centered on the current room (new words on the signs; the room behind the door now counts as prepared),
+        /// and walking resumes. The doorway opens only when the slide has also finished (RoomWorldView.IsPassable).
+        /// A partial fill is a normal result; a refusal, a failed display or an error stops play instead, with
+        /// nothing undone or retried. A result after a new experiment, disabling or a player change does nothing.
+        /// </summary>
+        async void PrepareRoom(Direction side)
+        {
+            var p = controlled;
+            p.SetMovementLocked(true);
+            busy = true;
+            SetHint(null);                                                         // no caption while waiting
+            var token = cts.Token;
+            var gen = generator;
+            var d = dataset;
+            var view = worldView != null;
+            try
+            {
+                var (update, refusal, snapshot) = await Task.Run(() =>
+                {
+                    var u = gen.Prepare(side, out var r, token);
+                    return (u, r, view && u != null ? RoomViewSnapshot.Capture(gen.Map, d.GetWord) : null);
+                }, token);
+                if (this == null || token.IsCancellationRequested || gen != generator) return;   // stale result
+                if (update == null)
+                {
+                    Halt($"{Directions.Korean(side)} 방 주변 준비가 거절되었습니다 — {refusal}");
+                    return;
+                }
+                status = update.Status;
+                LogUpdate(update);
+                var shown = ShowView(snapshot, out var showFailure);
+                if (controlled != p) return;                                       // released meanwhile
+                if (!shown)
+                {
+                    Halt($"주변 방 표시 준비 실패 — {showFailure}");
+                    return;
+                }
+                lastPosition = p.transform.position;
+                p.SetMovementLocked(status != "running");
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                if (this != null && gen == generator && !token.IsCancellationRequested) Halt("주변 준비 중 오류가 났습니다(Console 확인)");
+            }
+            finally
+            {
+                busy = false;
+            }
         }
 
         /// <summary>
@@ -412,10 +474,12 @@ namespace WordRoom.RoomDebug
 
         /// <summary>
         /// Entered the neighbor on `side`: walking and door use stop at once (look, gravity and Escape go on), one
-        /// generator Move runs on the worker with the snapshot taken there, the main thread shows the result, and
-        /// walking resumes where the player stands (no re-placement) once the arrival room is shown under the
-        /// player. A refused move, a failed display or an error stops play instead; nothing is undone or retried.
-        /// A result arriving after a new experiment, disabling or a player change never gives control back.
+        /// generator Enter (position, moves, visits, target and test limit only — its neighbors were filled when its
+        /// door was opened, so there is no generation wait) runs on the worker with the snapshot taken there, the
+        /// main thread shows the result centered on the arrival room, and walking resumes where the player stands
+        /// (no re-placement) once that view is complete and the arrival room is under the player. A refused entry,
+        /// a failed display or an error stops play instead; nothing is undone or retried. A result arriving after
+        /// a new experiment, disabling or a player change never gives control back.
         /// </summary>
         async void EnterRoom(Direction side)
         {
@@ -431,7 +495,7 @@ namespace WordRoom.RoomDebug
             {
                 var (update, refusal, snapshot) = await Task.Run(() =>
                 {
-                    var u = gen.Move(side, out var r, token);
+                    var u = gen.Enter(side, out var r, token);
                     return (u, r, view && u != null ? RoomViewSnapshot.Capture(gen.Map, d.GetWord) : null);
                 }, token);
                 if (this == null || token.IsCancellationRequested || gen != generator) return;   // stale result
@@ -456,13 +520,13 @@ namespace WordRoom.RoomDebug
                 lastPosition = p.transform.position;
                 p.SetMovementLocked(status != "running");                          // finished: look and Escape only
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
             }
             catch (Exception e)
             {
                 Debug.LogException(e);
-                if (this != null && gen == generator) Halt("입장 처리 중 오류가 났습니다(Console 확인)");
+                if (this != null && gen == generator && !token.IsCancellationRequested) Halt("입장 처리 중 오류가 났습니다(Console 확인)");
             }
             finally
             {
@@ -561,6 +625,17 @@ namespace WordRoom.RoomDebug
         {
             var map = generator.Map;
             var sb = new StringBuilder();
+            if (u.Kind == "prepare")                         // door opened: the room behind it, not entered yet
+            {
+                map.TryGetWord(u.To, out var there);
+                sb.Append($"문 열기 주변 준비: {Directions.Between(u.From, u.To).Map(Directions.Korean)} {Word(there)} {u.To} — 입장 전(현재 위치·이동·방문 그대로)");
+                foreach (var d in Directions.DisplayOrder)
+                {
+                    var q = u.To.Add(Directions.Offset(d));
+                    sb.Append("\n  ").Append(Directions.Korean(d)).Append(": ").Append(map.TryGetWord(q, out var w) ? Word(w) : "미생성");
+                }
+                sb.Append('\n');
+            }
             map.TryGetWord(map.Position, out var here);      // the current room always exists
             sb.Append($"현재: {Word(here)} {map.Position} | 목표: {Word(map.Target)}");
             foreach (var d in Directions.DisplayOrder)
@@ -579,7 +654,7 @@ namespace WordRoom.RoomDebug
             var map = generator.Map;
             var f = u.Fill;
             sb.Append("\n--- 상세");
-            sb.Append($"\n{(u.Kind == "start" ? "시작" : $"이동 {Directions.Between(u.From, u.To).Map(Directions.Korean)} {u.From}→{u.To}{(u.FirstVisit ? " (첫 방문)" : " (재방문)")}")} · " +
+            sb.Append($"\n{KindText(u)} · " +
                       $"이동 {u.Moves} · 고유 방문 {map.UniqueVisited} · 생성 방 {map.RoomCount} · 목표 유도 강도 {u.GuidanceStrength.ToString("0.#####", CultureInfo.InvariantCulture)}");
             if (f == null) return;
             switch (f.Stage)
@@ -619,6 +694,19 @@ namespace WordRoom.RoomDebug
                 }
             }
             foreach (var e in f.Empty) sb.Append($"\n- {e.Position} 빈 위치: {ReasonText(e.Reason)}");
+        }
+
+        static string KindText(GenerationUpdate u)
+        {
+            var step = $"{Directions.Between(u.From, u.To).Map(Directions.Korean)} {u.From}→{u.To}";
+            var visit = u.FirstVisit ? " (첫 방문)" : " (재방문)";
+            switch (u.Kind)
+            {
+                case "start": return "시작";
+                case "prepare": return $"문 열기 주변 준비 {step} (입장 전: 이동·방문 변화 없음)";
+                case "enter": return $"입장 {step}{visit} · 주변 생성 없음(문을 열 때 준비됨)";
+                default: return $"이동 {step}{visit}";
+            }
         }
 
         static string StageText(string stage)

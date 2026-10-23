@@ -93,7 +93,10 @@ namespace WordRoom.Generation
     /// </summary>
     public sealed class GenerationUpdate
     {
-        /// <summary>"start" or "move".</summary>
+        /// <summary>
+        /// "start", "move" (enter + fill), "prepare" (fill around an adjacent room, no move; Moved false) or
+        /// "enter" (move into a prepared room, no fill; Fill null).
+        /// </summary>
         public string Kind;
         public GridPos From;
         public GridPos To;
