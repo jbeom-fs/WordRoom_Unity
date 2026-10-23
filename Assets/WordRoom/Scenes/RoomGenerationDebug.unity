@@ -210,7 +210,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: d26a1dc925506464987329c505b3b1d2, type: 3}
-  m_Name:
+  m_Name: 
   m_EditorClassIdentifier: WordRoom.World::WordRoom.World.RoomWorldView
   roomPrefab: {fileID: 1912035573534457102, guid: 440c72d3145e1424e81823a1439a3fdb, type: 3}
   doorPrefab: {fileID: 1284649422595464468, guid: dfff4fe20e765924a9d7645f56d7e613, type: 3}
@@ -225,7 +225,7 @@ MonoBehaviour:
   doorOpenLift: 0
   doorOpenSeconds: 0.5
   worldOrigin: {x: 0, y: 0, z: 0}
-  roomSpacing: 0
+  roomSpacing: 6.2
   roomRoot: {fileID: 0}
   doorRoot: {fileID: 0}
   moveCamera: 1
@@ -243,7 +243,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 501cae595468d5b08b0e77e5d432c79b, type: 3}
-  m_Name:
+  m_Name: 
   m_EditorClassIdentifier: WordRoom.World::WordRoom.World.PlayHint
   font: {fileID: 11400000, guid: 52be4e75225fdda49b530d9775753c59, type: 2}
   fontSize: 30
@@ -393,7 +393,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!108 &1675232102
 Light:
   m_ObjectHideFlags: 0
@@ -402,14 +402,14 @@ Light:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1675232101}
   m_Enabled: 1
-  serializedVersion: 11
+  serializedVersion: 12
   m_Type: 1
   m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_Intensity: 2
   m_Range: 10
   m_SpotAngle: 30
   m_InnerSpotAngle: 21.80208
-  m_CookieSize: 10
+  m_CookieSize2D: {x: 10, y: 10}
   m_Shadows:
     m_Type: 2
     m_Resolution: -1
@@ -456,6 +456,9 @@ Light:
   m_ForceVisible: 0
   m_ShadowRadius: 0
   m_ShadowAngle: 0
+  m_LightUnit: 1
+  m_LuxAtDistance: 1
+  m_EnableSpotReflector: 1
 --- !u!4 &1675232103
 Transform:
   m_ObjectHideFlags: 0
@@ -481,19 +484,25 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 474bcb49853aa07438625e644c072ee6, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:
-  m_Version: 3
+  m_Name: 
+  m_EditorClassIdentifier: 
   m_UsePipelineSettings: 1
   m_AdditionalLightsShadowResolutionTier: 2
-  m_LightLayerMask: 1
-  m_RenderingLayers: 1
   m_CustomShadowLayers: 0
-  m_ShadowLayerMask: 1
-  m_ShadowRenderingLayers: 1
   m_LightCookieSize: {x: 1, y: 1}
   m_LightCookieOffset: {x: 0, y: 0}
   m_SoftShadowQuality: 1
+  m_RenderingLayersMask:
+    serializedVersion: 0
+    m_Bits: 1
+  m_ShadowRenderingLayersMask:
+    serializedVersion: 0
+    m_Bits: 1
+  m_Version: 4
+  m_LightLayerMask: 1
+  m_ShadowLayerMask: 1
+  m_RenderingLayers: 1
+  m_ShadowRenderingLayers: 1
 --- !u!1 &1914820001
 GameObject:
   m_ObjectHideFlags: 0
@@ -563,7 +572,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: dab69d48f9473fbd9f6e9b135174b6f5, type: 3}
-  m_Name:
+  m_Name: 
   m_EditorClassIdentifier: WordRoom.World::WordRoom.World.FirstPersonPlayer
   view: {fileID: 1232969874}
   moveSpeed: 3

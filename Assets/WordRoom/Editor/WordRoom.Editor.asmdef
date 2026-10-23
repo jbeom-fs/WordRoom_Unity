@@ -7,7 +7,9 @@
         "WordRoom.Unity",
         "WordRoom.RoomDebug",
         "WordRoom.Generation",
-        "WordRoom.World"
+        "WordRoom.World",
+        "Unity.TextMeshPro",
+        "UnityEngine.UI"
     ],
     "includePlatforms": [
         "Editor"

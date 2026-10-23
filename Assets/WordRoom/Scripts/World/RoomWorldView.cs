@@ -53,7 +53,7 @@ namespace WordRoom.World
         [Header("배치 (새 실험 시작 시 고정)")]
         [Tooltip("좌표 (0, 0) 방의 월드 위치")]
         [SerializeField] Vector3 worldOrigin = Vector3.zero;
-        [Tooltip("이웃 좌표 사이 거리. 0 이하면 방 프리팹의 메시 크기(가로·세로 중 큰 값)를 씁니다.")]
+        [Tooltip("이웃 좌표 사이 거리. 0 이하면 방 프리팹의 메시 크기(가로·세로 중 큰 값)를 씁니다. 아카이브 방은 바닥 외곽 6.2를 지정합니다(장식·수납부가 자동 측정에 섞이지 않게).")]
         [SerializeField] float roomSpacing;
         [Tooltip("방 인스턴스의 부모(장면 오브젝트). 비우면 이 오브젝트 아래 자동 루트 'Rooms'를 만들어 재사용합니다. 바꾸면 다음 새 실험부터 적용되고, 그때 이전 루트의 풀 인스턴스만 정리됩니다. 스케일 1 권장.")]
         [SerializeField] Transform roomRoot;

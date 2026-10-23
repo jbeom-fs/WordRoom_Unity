@@ -9,7 +9,8 @@ namespace WordRoom.EditorTools
 {
     /// <summary>
     /// User-run helper: adds RoomWorldView next to the selected (or the scene's) RoomGenerationDebug and fills only
-    /// empty fields — the test prefabs, Camera.main and the debug component's worldView reference. Existing values,
+    /// empty fields — the room/door prefabs (archive models after the replace menu), Camera.main, the archive room
+    /// spacing 6.20 when Room Spacing is unset, and the debug component's worldView reference. Existing values,
     /// prefabs, cameras, lights and project settings are not changed. Marks the scene dirty; saving is up to the user.
     /// </summary>
     public static class RoomWorldViewSetup
@@ -40,6 +41,12 @@ namespace WordRoom.EditorTools
             FillIfEmpty(so, "roomPrefab", AssetDatabase.LoadAssetAtPath<GameObject>(RoomPrefabPath), RoomPrefabPath, notes);
             FillIfEmpty(so, "doorPrefab", AssetDatabase.LoadAssetAtPath<GameObject>(DoorPrefabPath), DoorPrefabPath, notes);
             FillIfEmpty(so, "debugCamera", Camera.main, "Main Camera", notes);
+            var spacing = so.FindProperty("roomSpacing");
+            if (spacing != null && spacing.floatValue <= 0f)                 // archive rooms: 6.20 outline, not the decorated mesh bounds
+            {
+                spacing.floatValue = ArchiveModelSetup.RoomSpacing;
+                notes.Add($"roomSpacing ← {ArchiveModelSetup.RoomSpacing:0.00}");
+            }
             so.ApplyModifiedProperties();
 
             var dso = new SerializedObject(debug);
