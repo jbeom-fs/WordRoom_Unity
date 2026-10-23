@@ -8,6 +8,7 @@
         "WordRoom.RoomDebug",
         "WordRoom.Generation",
         "WordRoom.World",
+        "WordRoom.Game",
         "Unity.TextMeshPro",
         "UnityEngine.UI"
     ],

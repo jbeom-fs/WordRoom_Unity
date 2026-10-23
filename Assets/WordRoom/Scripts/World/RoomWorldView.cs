@@ -8,8 +8,8 @@ using WordRoom.Generation;
 namespace WordRoom.World
 {
     /// <summary>
-    /// 3D view of the logical map around the current room: the current room and its existing 상·하·좌·우 rooms
-    /// (at most five), plus one shared door per connection of those rooms. Reads only RoomViewSnapshot; never
+    /// 3D view of the logical map around the current room: the existing rooms within the display radius (the
+    /// snapshot decides: up to 5, 13 or 25), plus one shared door per connection of those rooms. Reads only RoomViewSnapshot; never
     /// calls the generator, never creates words or rooms, and returning an instance never removes map data.
     /// Each update computes the wanted rooms and doors, returns what is no longer wanted first, then rents only
     /// what is missing; instances still wanted stay as they are. Door states live in DoorStateStore per
@@ -25,7 +25,7 @@ namespace WordRoom.World
     [DisallowMultipleComponent]
     public sealed class RoomWorldView : MonoBehaviour
     {
-        const int MaxShownRooms = 5;
+        const int MaxShownRooms = RoomViewSnapshot.MaxRooms;   // display radius 3 at most (25 rooms); the snapshot decides the set
         const float EntryDepth = 0.15f;      // player center this far past the room boundary = entered the next room
 
         [Header("프리팹 (사용자 제작 — 코드가 형태·크기·재질을 바꾸지 않음)")]
@@ -164,7 +164,7 @@ namespace WordRoom.World
         }
 
         /// <summary>
-        /// Shows the snapshot's rooms (current + existing 상·하·좌·우) and the doors of their connections. Needs BeginSession.
+        /// Shows the snapshot's rooms (existing rooms within the display radius, current first) and the doors of their connections. Needs BeginSession.
         /// `allowDebugCamera` false (first-person player in use) leaves the debug camera where it is.
         /// Returns whether everything the snapshot needs is really usable afterwards: each of its rooms and the door
         /// of every doorway of those rooms (also toward 미생성 or hidden rooms) is a live, bound, active instance, and
@@ -525,7 +525,7 @@ namespace WordRoom.World
 
         void LogPrepared(bool rebuilt)
         {
-            var sb = new StringBuilder("[3D 방] 표시 준비 — 현재 방 + 상·하·좌·우 중 생성된 방(최대 5개), 연결마다 문 1개" +
+            var sb = new StringBuilder("[3D 방] 표시 준비 — 현재 방 기준 표시 거리 안의 생성된 방(1칸 5개·2칸 13개·3칸 25개까지), 연결마다 문 1개" +
                                        (rebuilt ? " (프리팹 배치 정보 새로 계산)" : " (프리팹 배치 정보 재사용)") + "\n");
             sb.Append(layout.Describe(spacing));
             sb.Append($"\n  루트: 방 '{roomPool.Parent.name}'{(roomPool.Parent == autoRoomRoot ? "(자동)" : "")}, 문 '{doorPool.Parent.name}'{(doorPool.Parent == autoDoorRoot ? "(자동)" : "")}" +

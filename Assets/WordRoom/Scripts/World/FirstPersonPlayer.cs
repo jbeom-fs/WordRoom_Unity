@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using WordRoom.Settings;
 
 namespace WordRoom.World
 {
@@ -12,6 +13,11 @@ namespace WordRoom.World
     /// in progress, finished experiment, stop after an error). The cursor is locked while playing: Escape or focus
     /// loss releases it, a click in the Game view locks it again; no movement or look input while it is released.
     /// No jump, run, crouch or head bob. Door aiming and the E key are read here; what they do is decided outside.
+    /// Player settings: look = base sensitivity × GameSettings.MouseSensitivity (computed at use, never stored back),
+    /// optional inverted vertical look, and the view camera's field of view, applied on enable and on every change.
+    /// SetInputBlocked (an open game menu) is separate from SetMovementLocked (a generation request): it stops look,
+    /// walking, E and click-to-lock but not gravity, and unblocking takes effect from the next frame so the closing
+    /// click or key never acts in the game. With HandlesEscape off a menu owns the Escape key.
     /// </summary>
     [DisallowMultipleComponent]
     [RequireComponent(typeof(CharacterController))]
@@ -33,18 +39,28 @@ namespace WordRoom.World
         [SerializeField] Vector3 viewHomeLocalPosition;
 
         CharacterController controller;
+        Camera viewCamera;
         float pitch;
         float verticalSpeed;
         bool placed;
         bool movementLocked;
+        bool inputBlocked;
+        int inputResumeFrame;
+        bool relockOnResume;
 
         static bool CursorLocked => Cursor.lockState == CursorLockMode.Locked;
 
         /// <summary>Placed on a floor by PlaceAt and enabled: walking (unless locked), looking and falling run.</summary>
         public bool Placed => placed && isActiveAndEnabled;
 
-        /// <summary>Placed, cursor locked and the game focused: the state in which look and key input are read.</summary>
-        public bool HasControlFocus => Placed && CursorLocked && Application.isFocused;
+        /// <summary>Not blocked by a menu, and not in the frame its closing input arrived.</summary>
+        bool InputAllowed => !inputBlocked && Time.frameCount >= inputResumeFrame;
+
+        /// <summary>Placed, cursor locked, the game focused and no menu open: the state in which look and key input are read.</summary>
+        public bool HasControlFocus => Placed && CursorLocked && Application.isFocused && InputAllowed;
+
+        /// <summary>Escape releases the cursor here (default). Off when a game menu handles Escape instead.</summary>
+        public bool HandlesEscape { get; set; } = true;
 
         /// <summary>E pressed in this frame (once per press, holding does not repeat) while HasControlFocus.</summary>
         public bool InteractPressed => HasControlFocus && Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame;
@@ -53,7 +69,37 @@ namespace WordRoom.World
         {
             controller = GetComponent<CharacterController>();
             if (view == null) Debug.LogError("[1인칭] 시점 카메라(View)가 지정되지 않아 상하 시점을 적용하지 않습니다.", this);
+            else viewCamera = view.GetComponent<Camera>();
             RememberViewHome();
+        }
+
+        void OnEnable()
+        {
+            ApplySettings();
+            GameSettings.Changed += ApplySettings;
+        }
+
+        /// <summary>Only the play camera's field of view; look sensitivity and inversion are read at use.</summary>
+        void ApplySettings()
+        {
+            if (viewCamera != null) viewCamera.fieldOfView = GameSettings.FieldOfView;
+        }
+
+        /// <summary>
+        /// Blocked by a game menu: no look, walking, E or click-to-lock (gravity goes on). Unblocking applies from the
+        /// next frame and locks the cursor again then, if the player is placed and the game focused.
+        /// </summary>
+        public void SetInputBlocked(bool blocked)
+        {
+            if (blocked)
+            {
+                inputBlocked = true;
+                return;
+            }
+            if (!inputBlocked) return;
+            inputBlocked = false;
+            inputResumeFrame = Time.frameCount + 1;
+            relockOnResume = true;
         }
 
         /// <summary>
@@ -123,7 +169,8 @@ namespace WordRoom.World
             pitch = 0f;
             if (view != null) view.SetLocalPositionAndRotation(viewHomeSaved ? viewHomeLocalPosition : view.localPosition, Quaternion.identity);
             placed = true;
-            if (Application.isFocused) SetCursorLock(true);
+            if (Application.isFocused && InputAllowed) SetCursorLock(true);
+            else if (inputBlocked) relockOnResume = true;                // a menu is open: lock when it closes
             failure = null;
             return true;
         }
@@ -173,12 +220,18 @@ namespace WordRoom.World
         {
             var kb = Keyboard.current;
             var mouse = Mouse.current;
-            if (kb != null && kb.escapeKey.wasPressedThisFrame) SetCursorLock(false);
-            else if (placed && !CursorLocked && Application.isFocused && mouse != null && mouse.leftButton.wasPressedThisFrame) SetCursorLock(true);
+            var allowed = InputAllowed;
+            if (allowed && relockOnResume)
+            {
+                relockOnResume = false;
+                if (placed && Application.isFocused) SetCursorLock(true);
+            }
+            if (HandlesEscape && kb != null && kb.escapeKey.wasPressedThisFrame) SetCursorLock(false);
+            else if (allowed && placed && !CursorLocked && Application.isFocused && mouse != null && mouse.leftButton.wasPressedThisFrame) SetCursorLock(true);
             if (!placed) return;
 
             var input = Vector2.zero;
-            if (CursorLocked && Application.isFocused)
+            if (allowed && CursorLocked && Application.isFocused)
             {
                 if (mouse != null) Look(mouse.delta.ReadValue());
                 if (kb != null && !movementLocked)
@@ -193,11 +246,13 @@ namespace WordRoom.World
             controller.Move((move + Vector3.up * verticalSpeed) * Time.deltaTime);
         }
 
-        /// <summary>Mouse delta is already a per-frame amount: no deltaTime here.</summary>
+        /// <summary>Mouse delta is already a per-frame amount: no deltaTime here. The setting multiplier is applied here only.</summary>
         void Look(Vector2 delta)
         {
-            transform.Rotate(0f, delta.x * lookSensitivity, 0f);
-            pitch = Mathf.Clamp(pitch - delta.y * lookSensitivity, -pitchLimit, pitchLimit);
+            var sensitivity = lookSensitivity * GameSettings.MouseSensitivity;
+            var vertical = GameSettings.InvertMouseY ? -1f : 1f;
+            transform.Rotate(0f, delta.x * sensitivity, 0f);
+            pitch = Mathf.Clamp(pitch - delta.y * sensitivity * vertical, -pitchLimit, pitchLimit);
             if (view != null) view.localRotation = Quaternion.Euler(pitch, 0f, 0f);
         }
 
@@ -210,6 +265,7 @@ namespace WordRoom.World
         // never resumes walking or falling from an earlier placement; only the next PlaceAt does.
         void OnDisable()
         {
+            GameSettings.Changed -= ApplySettings;
             Suspend();
             SetCursorLock(false);
         }

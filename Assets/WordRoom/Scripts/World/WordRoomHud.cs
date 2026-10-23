@@ -11,7 +11,7 @@ namespace WordRoom.World
     /// Its overlay canvas sorts below PlayHint so the centered hints stay on top. The canvas, panel and texts are
     /// made once at runtime under this object when first shown; Show only rewrites a text whose string changed;
     /// Hide keeps them for reuse; Clear (also on disable/destroy) removes them. Sizes are in 1920×1080 reference
-    /// pixels scaled with the screen (CanvasScaler, match 0.5). The word keeps one line in a fixed-width field:
+    /// pixels scaled with the screen (CanvasScaler, match 0.5) and by the UI size setting (UiScaleBinding). The word keeps one line in a fixed-width field:
     /// 24px, reduced down to 20px only when it would not fit (words are at most 8 characters, which fit at 24px by
     /// design; the field never wraps). Main thread only.
     /// </summary>
@@ -84,11 +84,7 @@ namespace WordRoom.World
             var canvas = canvasObject.AddComponent<Canvas>();
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
             canvas.sortingOrder = sortingOrder;
-            var scaler = canvasObject.AddComponent<CanvasScaler>();
-            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            scaler.referenceResolution = new Vector2(1920f, 1080f);
-            scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
-            scaler.matchWidthOrHeight = 0.5f;
+            UiScaleBinding.Configure(canvasObject);                                    // 1920×1080 at 100% UI size, follows the setting
 
             var panel = AddRect("Panel", canvasObject.transform, new Vector2(Margin, -Margin), PanelSize);
             Fill(AddImage("Background", panel), Walnut);

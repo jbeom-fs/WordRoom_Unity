@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using UnityEngine;
 using WordRoom.Data;
 using WordRoom.Generation;
+using WordRoom.Settings;
 using WordRoom.UnityLayer;
 using WordRoom.World;
 
@@ -33,6 +34,11 @@ namespace WordRoom.RoomDebug
     /// locked during each request until its result is shown (and, for an entry, the player stands on the arrival
     /// floor). The arrow keys keep the combined Move. A player that is disconnected, replaced or disabled is
     /// stopped and only placed again by a new experiment.
+    /// Two ways to start: the Inspector words (StartExperiment; automatically when startWhenDataReady, the
+    /// development scene) or StartGame with words, seed and vocabulary chosen by the game (the menu flow, with
+    /// automatic start off). The display radius (GameSettings.DisplayRadius) is read when each request starts; a
+    /// change while idle re-captures the existing map on the worker and shows it again — never a Fill, Prepare,
+    /// Move or Enter — and a change during a request is shown once that request finished (latest value only).
     /// </summary>
     [RequireComponent(typeof(WordRoomDataService))]
     public sealed class RoomGenerationDebug : MonoBehaviour
@@ -78,6 +84,9 @@ namespace WordRoom.RoomDebug
         [Tooltip("화면 좌상단 현재·목표 단어 HUD. 1인칭 플레이어가 배치된 동안만 보입니다. 비우면 같은 오브젝트의 것을 찾고, 없으면 HUD 없이 진행합니다.")]
         [SerializeField] WordRoomHud hud;
 
+        [Tooltip("진행 정지·플레이어 미배치 안내 뒤에 붙는 다음 행동 안내. 메뉴로 실행하는 씬은 메인 메뉴 복귀를 안내합니다.")]
+        [SerializeField] string haltAdvice = "새 실험을 시작하세요";
+
         const float DoorReach = 2f;          // E reaches doors up to this far from the eye along the screen center
 
         WordRoomDataService service;
@@ -96,13 +105,24 @@ namespace WordRoom.RoomDebug
         Vector3 lastPosition;                // player position at the previous entry check
         string hudCurrent;                   // HUD words from the last confirmed placement or entry snapshot; null = none
         string hudTarget;
+        int shownRadius = -1;                // display radius of the last snapshot shown in this experiment; -1 = none yet
 
         /// <summary>The connected player when its component and object are active; null = arrow-key/camera debug.</summary>
         FirstPersonPlayer ActivePlayer => player != null && player.isActiveAndEnabled ? player : null;
 
+        /// <summary>The connected first-person player (may be inactive or null).</summary>
+        public FirstPersonPlayer Player => player;
+
+        /// <summary>Start from the Inspector words as soon as the data is ready (development scene). The menu flow turns it off.</summary>
+        public bool AutoStartFromInspector
+        {
+            get => startWhenDataReady;
+            set => startWhenDataReady = value;
+        }
+
         /// <summary>Stop reason and what to do, kept on screen until the next new experiment; null when not stopped.</summary>
         // The hint font (Pretendard-Black SDF, static atlas) has no '·', which the reasons may contain.
-        string HaltHint => halt != null ? $"진행 정지: {halt.Replace("·", ", ")}\n새 실험을 시작하세요" : null;
+        string HaltHint => halt != null ? $"진행 정지: {halt.Replace("·", ", ")}\n{haltAdvice}" : null;
 
         void Awake()
         {
@@ -167,18 +187,9 @@ namespace WordRoom.RoomDebug
 
         /// <summary>Starts a new experiment with the current Inspector values (also from the component's context menu).</summary>
         [ContextMenu("새 실험 시작")]
-        public async void StartExperiment()
+        public void StartExperiment()
         {
-            if (busy)
-            {
-                Debug.Log("[방 생성] 생성 중이라 새 실험을 시작하지 않습니다.");
-                return;
-            }
-            if (!service.TryGetDataset(out var d))
-            {
-                Debug.Log($"[방 생성] 데이터가 아직 준비되지 않았습니다 (상태: {service.State}).");
-                return;
-            }
+            if (!CanStart(out var d)) return;
             if (!d.TryGetWordRank(startWord, out var start))
             {
                 Debug.LogError($"[방 생성] 시작 단어가 어휘에 없습니다: '{startWord}' (정규화 '{WordNormalizer.Normalize(startWord)}'). 다른 단어로 바꾸지 않았습니다.");
@@ -189,7 +200,59 @@ namespace WordRoom.RoomDebug
                 Debug.LogError($"[방 생성] 목표 단어가 어휘에 없습니다: '{targetWord}' (정규화 '{WordNormalizer.Normalize(targetWord)}'). 다른 단어로 바꾸지 않았습니다.");
                 return;
             }
-            var config = BuildConfig(d);            // copied now; later Inspector edits do not reach this experiment
+            RunExperiment(d, start, target, BuildConfig(d));   // copied now; later Inspector edits do not reach this experiment
+        }
+
+        /// <summary>
+        /// Starts a game with words and seed chosen by the game (word ranks of the dataset). The vocabulary is the
+        /// top `vocabularyLimit` surfaces of 1~8 characters, the test move limit is off; every other generation rule
+        /// comes from the data package and the Inspector as in StartExperiment. False when busy or the data is not
+        /// ready; invalid words or ranges are reported by the generator and stop play (no other words are tried).
+        /// </summary>
+        public bool StartGame(int startRank, int targetRank, long gameSeed, int gameVocabularyLimit)
+        {
+            if (!CanStart(out var d)) return false;
+            var config = BuildConfig(d);
+            config.Seed = gameSeed;
+            config.VocabularyLimit = gameVocabularyLimit;
+            config.MinWordLength = 1;
+            config.MaxWordLength = 8;
+            config.UseMoveLimit = false;                          // normal play has no move limit
+            config.Source = "데이터 패키지 settings.json + Inspector(목표 유도) + 게임 난이도(어휘 범위)·자동 선택(시작·목표·시드)";
+            RunExperiment(d, startRank, targetRank, config);
+            return true;
+        }
+
+        /// <summary>
+        /// Play cannot begin or go on (e.g. the data failed to load): play stops with the reason on screen, the
+        /// player is released and the cursor freed. Nothing is retried.
+        /// </summary>
+        public void ReportFatal(string reason)
+        {
+            ReleaseControlled();
+            halt = reason;
+            FirstPersonPlayer.ReleaseCursor();
+            Debug.LogError($"[방 생성] 진행할 수 없습니다: {reason}");
+        }
+
+        bool CanStart(out WordRoomDataset d)
+        {
+            d = null;
+            if (busy)
+            {
+                Debug.Log("[방 생성] 생성 중이라 새 실험을 시작하지 않습니다.");
+                return false;
+            }
+            if (!service.TryGetDataset(out d))
+            {
+                Debug.Log($"[방 생성] 데이터가 아직 준비되지 않았습니다 (상태: {service.State}).");
+                return false;
+            }
+            return true;
+        }
+
+        async void RunExperiment(WordRoomDataset d, int start, int target, GenerationConfig config)
+        {
             cts?.Cancel();
             cts = new CancellationTokenSource();
             var token = cts.Token;
@@ -205,23 +268,26 @@ namespace WordRoom.RoomDebug
             controlled = null;
             status = null;
             halt = null;
+            shownRadius = -1;
             SetHudWords(null, null);                              // the previous experiment's words never come back
             if (view) ViewCall(() => worldView.BeginSession());   // previous rooms/doors back to the pools, door states cleared
             Debug.Log($"[방 생성] 새 실험 준비: {d.GetWord(start)} → {d.GetWord(target)} · {config}" +
                       (config.TargetGuidance ? " · 목표 근접도 계산 중" : ""));
+            var radius = GameSettings.DisplayRadius;
             try
             {
                 var (gen, update, snapshot) = await Task.Run(() =>
                 {
                     var g = RoomGenerator.Create(d, config, start, target, token);
                     var u = g.Start(token);
-                    return (g, u, view ? RoomViewSnapshot.Capture(g.Map, d.GetWord) : null);   // taken here, after the request finished
+                    return (g, u, view ? RoomViewSnapshot.Capture(g.Map, d.GetWord, radius) : null);   // taken here, after the request finished
                 }, token);
                 if (this == null || token.IsCancellationRequested) return;
                 generator = gen;
                 status = update.Status;
                 LogUpdate(update);
                 var shown = ShowView(snapshot, out var showFailure);
+                if (shown) shownRadius = radius;
                 var placeFailure = PlacePlayer(snapshot, shown, showFailure);
                 if (placeFailure != null) FailStart($"시작 위치 배치 실패 — {placeFailure}", stoppedControlled, stoppedPlayer, ActivePlayer);
                 else if (controlled != null) SetHudWords(snapshot.CurrentWord, snapshot.TargetWord);   // after the view and placement
@@ -265,6 +331,7 @@ namespace WordRoom.RoomDebug
         {
             TrackPlayer();
             RefreshHud();
+            RefreshRadiusIfChanged();
             var direction = ReadDirection();
             if (ActivePlayer != null)
             {
@@ -323,12 +390,13 @@ namespace WordRoom.RoomDebug
             var gen = generator;
             var d = dataset;
             var view = worldView != null;
+            var radius = GameSettings.DisplayRadius;
             try
             {
                 var (update, refusal, snapshot) = await Task.Run(() =>
                 {
                     var u = gen.Move(direction, out var r, token);
-                    return (u, r, view && u != null ? RoomViewSnapshot.Capture(gen.Map, d.GetWord) : null);
+                    return (u, r, view && u != null ? RoomViewSnapshot.Capture(gen.Map, d.GetWord, radius) : null);
                 }, token);
                 if (this == null || token.IsCancellationRequested || gen != generator) return;   // stale result of an earlier experiment
                 if (update == null) Debug.Log($"[방 생성] 이동 불가: {refusal}");     // refused: the 3D view is not moved
@@ -336,7 +404,7 @@ namespace WordRoom.RoomDebug
                 {
                     status = update.Status;
                     LogUpdate(update);
-                    ShowView(snapshot, out _);      // Console debug: an incomplete view is logged by the view itself
+                    if (ShowView(snapshot, out _)) shownRadius = radius;   // Console debug: an incomplete view is logged by the view itself
                 }
             }
             catch (OperationCanceledException)
@@ -345,6 +413,55 @@ namespace WordRoom.RoomDebug
             catch (Exception e)
             {
                 Debug.LogException(e);
+            }
+            finally
+            {
+                busy = false;
+            }
+        }
+
+        // ---- display radius -------------------------------------------------------------------------------
+        /// <summary>
+        /// Shows the current map again with the latest display radius when it differs from the shown one and no
+        /// request runs (a request in progress shows its own radius first; this then follows with the latest).
+        /// Nothing while stopped or before the first view of the experiment.
+        /// </summary>
+        void RefreshRadiusIfChanged()
+        {
+            if (busy || generator == null || worldView == null || halt != null || shownRadius < 0) return;
+            var radius = GameSettings.DisplayRadius;
+            if (radius != shownRadius) RefreshView(radius);
+        }
+
+        /// <summary>
+        /// Re-captures the existing map on the worker with `radius` and shows it (rooms leaving the range go back to
+        /// the pool, rooms entering it are rented; the current room always stays). Only a snapshot: no Fill, Prepare,
+        /// Move or Enter, so no word, visit or move changes. Runs as a request (busy), so no generator request can
+        /// change the map meanwhile and an older result never overwrites a newer one.
+        /// </summary>
+        async void RefreshView(int radius)
+        {
+            busy = true;
+            var token = cts.Token;
+            var gen = generator;
+            var d = dataset;
+            try
+            {
+                var snapshot = await Task.Run(() => RoomViewSnapshot.Capture(gen.Map, d.GetWord, radius), token);
+                if (this == null || token.IsCancellationRequested || gen != generator) return;   // stale result
+                if (ShowView(snapshot, out var failure)) shownRadius = radius;
+                else if (controlled != null) Halt($"표시 거리 변경 후 방 표시 준비 실패 — {failure}");
+                else shownRadius = radius;                                         // Console debug: logged by the view; no retry loop
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                if (this == null || gen != generator || token.IsCancellationRequested) return;
+                if (controlled != null) Halt("표시 거리 변경 중 오류가 났습니다(Console 확인)");
+                else shownRadius = radius;                                         // Console debug: no retry every frame
             }
             finally
             {
@@ -393,7 +510,7 @@ namespace WordRoom.RoomDebug
             }
             if (controlled == null)
             {
-                SetHint(generator != null ? "플레이어가 배치되지 않았습니다\n새 실험을 시작하세요" : null);
+                SetHint(generator != null ? $"플레이어가 배치되지 않았습니다\n{haltAdvice}" : null);
                 return;
             }
             if (status != "running")
@@ -430,12 +547,13 @@ namespace WordRoom.RoomDebug
             var gen = generator;
             var d = dataset;
             var view = worldView != null;
+            var radius = GameSettings.DisplayRadius;
             try
             {
                 var (update, refusal, snapshot) = await Task.Run(() =>
                 {
                     var u = gen.Prepare(side, out var r, token);
-                    return (u, r, view && u != null ? RoomViewSnapshot.Capture(gen.Map, d.GetWord) : null);
+                    return (u, r, view && u != null ? RoomViewSnapshot.Capture(gen.Map, d.GetWord, radius) : null);
                 }, token);
                 if (this == null || token.IsCancellationRequested || gen != generator) return;   // stale result
                 if (update == null)
@@ -446,6 +564,7 @@ namespace WordRoom.RoomDebug
                 status = update.Status;
                 LogUpdate(update);
                 var shown = ShowView(snapshot, out var showFailure);
+                if (shown) shownRadius = radius;
                 if (controlled != p) return;                                       // released meanwhile
                 if (!shown)
                 {
@@ -502,12 +621,13 @@ namespace WordRoom.RoomDebug
             var gen = generator;
             var d = dataset;
             var view = worldView != null;
+            var radius = GameSettings.DisplayRadius;
             try
             {
                 var (update, refusal, snapshot) = await Task.Run(() =>
                 {
                     var u = gen.Enter(side, out var r, token);
-                    return (u, r, view && u != null ? RoomViewSnapshot.Capture(gen.Map, d.GetWord) : null);
+                    return (u, r, view && u != null ? RoomViewSnapshot.Capture(gen.Map, d.GetWord, radius) : null);
                 }, token);
                 if (this == null || token.IsCancellationRequested || gen != generator) return;   // stale result
                 if (update == null)
@@ -518,6 +638,7 @@ namespace WordRoom.RoomDebug
                 status = update.Status;
                 LogUpdate(update);
                 var shown = ShowView(snapshot, out var showFailure);
+                if (shown) shownRadius = radius;
                 if (controlled != p) return;                                       // released meanwhile
                 string failure = null;
                 if (!shown) failure = $"주변 방 표시 준비 실패 — {showFailure}";
@@ -555,7 +676,7 @@ namespace WordRoom.RoomDebug
             halt = reason;
             if (controlled != null) controlled.Suspend();
             RefreshHud();                    // hidden: the shown words may no longer match the map
-            Debug.LogError($"[1인칭] 진행 정지 — 이동·문 열기를 멈춥니다. 새 실험을 시작하세요: {reason}");
+            Debug.LogError($"[1인칭] 진행 정지 — 이동·문 열기를 멈춥니다. {haltAdvice}: {reason}");
         }
 
         void SetHudWords(string current, string target)

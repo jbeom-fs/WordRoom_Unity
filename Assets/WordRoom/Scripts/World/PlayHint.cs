@@ -15,9 +15,9 @@ namespace WordRoom.World
     {
         [Tooltip("안내 문구 폰트(한글 TMP 폰트, 예: Assets/Font/Pretendard-Black SDF). 비우면 TMP 기본 폰트라 한글이 보이지 않을 수 있습니다.")]
         [SerializeField] TMP_FontAsset font;
-        [Tooltip("글자 크기(화면 픽셀)")]
+        [Tooltip("글자 크기(1920×1080 기준 픽셀, UI 크기 설정을 따름)")]
         [SerializeField] float fontSize = 30f;
-        [Tooltip("화면 중앙 기준 위치(픽셀). 기본은 중앙 조금 아래")]
+        [Tooltip("화면 중앙 기준 위치(1920×1080 기준 픽셀). 기본은 중앙 조금 아래")]
         [SerializeField] Vector2 offset = new Vector2(0f, -90f);
 
         GameObject canvasObject;
@@ -47,6 +47,7 @@ namespace WordRoom.World
             var canvas = canvasObject.AddComponent<Canvas>();
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
             canvas.sortingOrder = 100;
+            UiScaleBinding.Configure(canvasObject);   // same 1920×1080 reference and UI size setting as the HUD and menus
 
             var textObject = new GameObject("Text", typeof(RectTransform));
             textObject.transform.SetParent(canvasObject.transform, false);

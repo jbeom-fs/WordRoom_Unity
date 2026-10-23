@@ -1,0 +1,23 @@
+{
+    "name": "WordRoom.Game",
+    "rootNamespace": "WordRoom.Game",
+    "references": [
+        "WordRoom.Data",
+        "WordRoom.Unity",
+        "WordRoom.World",
+        "WordRoom.RoomDebug",
+        "WordRoom.Settings",
+        "Unity.TextMeshPro",
+        "UnityEngine.UI",
+        "Unity.InputSystem"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -17,13 +17,26 @@ namespace WordRoom.UnityLayer
 
     /// <summary>
     /// Owns the one loaded dataset of a scene: loads it once on a worker thread and exposes its state. Queries
-    /// before Ready throw DataNotReadyException instead of returning partial data.
+    /// before Ready throw DataNotReadyException instead of returning partial data. A dataset that loaded
+    /// successfully is kept for the rest of the application run (same package path and hash option), so going
+    /// back to the main menu and starting another game does not load the large package again; a failed or
+    /// cancelled load is never kept. Cleared at every play start.
     /// </summary>
     public sealed class WordRoomDataService : MonoBehaviour
     {
         [SerializeField] string packageFolder = PackageFormat.DefaultFolderName;
         [SerializeField] bool loadOnStart = true;
         [SerializeField] bool verifyHashes = true;
+
+        static WordRoomDataset cachedDataset;
+        static string cachedKey;
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        static void ResetCache()
+        {
+            cachedDataset = null;
+            cachedKey = null;
+        }
 
         WordRoomDataset dataset;
         Task<WordRoomDataset> loading;
@@ -89,8 +102,17 @@ namespace WordRoom.UnityLayer
             {
                 var source = CreateDefaultSource(packageFolder, out var path); // main thread: Application.* access
                 PackagePath = path;
+                var key = $"{path}|{verifyHashes}";
+                if (cachedDataset != null && cachedKey == key)
+                {
+                    dataset = cachedDataset;                                    // loaded earlier in this run
+                    SetState(DataLoadState.Ready);
+                    return dataset;
+                }
                 var report = new ProgressSink(this);
                 dataset = await Task.Run(() => WordRoomDataLoader.Load(source, options, report, token), token);
+                cachedDataset = dataset;
+                cachedKey = key;
                 SetState(DataLoadState.Ready);
                 return dataset;
             }
