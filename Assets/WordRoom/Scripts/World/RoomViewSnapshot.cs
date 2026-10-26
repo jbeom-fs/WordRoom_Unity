@@ -32,6 +32,9 @@ namespace WordRoom.World
         /// <summary>Surface of the experiment's target (RoomMap.Target, fixed at its start), copied on the worker.</summary>
         public string TargetWord { get; private set; }
 
+        /// <summary>RoomMap.UniqueVisited when captured: distinct rooms entered, start room included (for the goal result).</summary>
+        public int UniqueVisited { get; private set; }
+
         /// <summary>Existing rooms to show: the center first, then by distance, then from 상 to 하 and 좌 to 우 (fixed order).</summary>
         public IReadOnlyList<KeyValuePair<GridPos, int>> Rooms => rooms;
 
@@ -74,7 +77,7 @@ namespace WordRoom.World
         public static RoomViewSnapshot Capture(RoomMap map, Func<int, string> wordText, int radius = 1)
         {
             radius = Math.Max(1, Math.Min(MaxRadius, radius));
-            var s = new RoomViewSnapshot { Center = map.Position, Status = map.Status, Radius = radius, TargetWord = wordText(map.Target) };
+            var s = new RoomViewSnapshot { Center = map.Position, Status = map.Status, Radius = radius, TargetWord = wordText(map.Target), UniqueVisited = map.UniqueVisited };
             if (map.TryGetWord(map.Position, out var here)) s.CurrentWord = wordText(here);
             foreach (var offset in OffsetsByRadius[radius])                    // the center comes first
             {

@@ -109,6 +109,21 @@ namespace WordRoom.RoomDebug
         string haltHintFor, haltHintText;    // hint texts kept for the reason/status they were made from
         string endHintFor, endHintText;
         string unplacedHintText;
+        double playStartTime = double.NaN;   // real time (Time.realtimeSinceStartupAsDouble) control first became possible; NaN = not yet
+        bool goalReported;                   // this experiment's GoalReached was raised (at most once)
+
+        /// <summary>
+        /// Raised once per experiment when a first-person entry into the target room is confirmed (entry accepted,
+        /// view shown, player on the arrival floor; never for door opening, Prepare, arrow-key Moves, refusals,
+        /// cancelled or stale results), with the fixed time and visit count. Only when the play clock had started.
+        /// </summary>
+        public event Action<GoalResult> GoalReached;
+
+        /// <summary>Raised when a new experiment begins (previous results no longer apply).</summary>
+        public event Action ExperimentStarted;
+
+        /// <summary>Set by a result screen that shows the goal itself: the "목표 도달" hint is then not shown. Cleared by a new experiment.</summary>
+        public bool SuppressGoalHint { get; set; }
 
         /// <summary>The connected player when its component and object are active; null = arrow-key/camera debug.</summary>
         FirstPersonPlayer ActivePlayer => player != null && player.isActiveAndEnabled ? player : null;
@@ -300,6 +315,10 @@ namespace WordRoom.RoomDebug
             controlled = null;
             status = null;
             halt = null;
+            playStartTime = double.NaN;                           // time, visits and result belong to one experiment
+            goalReported = false;
+            SuppressGoalHint = false;
+            Raise(ExperimentStarted);
             shownRadius = -1;
             SetHudWords(null, null);                              // the previous experiment's words never come back
             if (view) ViewCall(() => worldView.BeginSession());   // previous rooms/doors back to the pools, door states cleared
@@ -547,7 +566,7 @@ namespace WordRoom.RoomDebug
             }
             if (status != "running")
             {
-                SetHint(EndHint);
+                SetHint(status == "success" && SuppressGoalHint ? null : EndHint);   // a result screen shows the goal instead
                 return;
             }
             string text = null;
@@ -626,6 +645,7 @@ namespace WordRoom.RoomDebug
         /// </summary>
         void LateUpdate()
         {
+            StartPlayClock();                                                      // after every Update: the player's cursor/focus handling of this frame is done
             if (controlled == null || busy || halt != null || status != "running" || worldView == null) return;
             if (controlled != player || !controlled.Placed) return;                // TrackPlayer releases it next frame
             var to = controlled.transform.position;
@@ -645,6 +665,7 @@ namespace WordRoom.RoomDebug
         /// </summary>
         async void EnterRoom(Direction side)
         {
+            var crossedAt = Time.realtimeSinceStartupAsDouble;                     // end of the play time if this entry reaches the goal
             var p = controlled;
             p.SetMovementLocked(true);
             busy = true;
@@ -684,6 +705,7 @@ namespace WordRoom.RoomDebug
                 lastPosition = p.transform.position;
                 p.SetMovementLocked(status != "running");                          // finished: look and Escape only
                 SetHudWords(snapshot.CurrentWord, hudTarget);                      // entry confirmed and shown: new current room, same target
+                if (update.Arrived) ReportGoal(crossedAt, snapshot.UniqueVisited);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -739,6 +761,62 @@ namespace WordRoom.RoomDebug
             {
                 hudMissingLogged = true;
                 Debug.LogWarning("[HUD] WordRoomHud가 없어 현재·목표 단어를 화면에 표시하지 않습니다(플레이는 계속). RoomGenerationDebug 오브젝트에 WordRoomHud를 두고 WordRoom/메인 메뉴와 게임 설정 구성 메뉴로 HudCanvas를 연결하세요.");
+            }
+        }
+
+        // ---- play time and goal result ------------------------------------------------------------------------
+        /// <summary>
+        /// Starts the play time once per experiment, in the first frame (checked in LateUpdate, after every Update,
+        /// so no script order is needed) the placed player really reads input: FirstPersonPlayer.CanTakeInput —
+        /// placed and enabled, cursor locked, window focused, no menu block or its resume frame, walking not locked.
+        /// Loading, the first generation and placement are not counted; a menu open, a lost focus or a free cursor
+        /// at placement delays the start. No key press is awaited. A failed start or placement leaves no controlled
+        /// player, so the clock never starts; once started, menus, focus loss, cursor release and generation waits
+        /// neither stop nor restart it.
+        /// </summary>
+        void StartPlayClock()
+        {
+            if (!double.IsNaN(playStartTime) || controlled == null || halt != null) return;
+            if (controlled == player && controlled.CanTakeInput) playStartTime = Time.realtimeSinceStartupAsDouble;
+        }
+
+        /// <summary>
+        /// The confirmed entry reached the target: the result is fixed here, once — time up to the boundary crossing
+        /// of this entry (not its worker or display time), visits from this entry's snapshot (copied on the worker).
+        /// </summary>
+        void ReportGoal(double crossedAt, int visitedRooms)
+        {
+            if (goalReported) return;
+            goalReported = true;
+            if (double.IsNaN(playStartTime))
+            {
+                Debug.LogWarning("[결과] 조작 시작 시각이 기록되지 않아 목표 도달 결과를 만들지 않았습니다(안내만 표시).");
+                return;
+            }
+            var result = new GoalResult(crossedAt - playStartTime, visitedRooms);
+            Debug.Log($"[결과] 목표 도달 — 소요 {result.Seconds:0.0}초, 방문 방 {result.VisitedRooms}개");
+            var handlers = GoalReached;
+            if (handlers == null) return;                                      // development scene: no result screen
+            try
+            {
+                handlers(result);
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);                                        // a listener's failure never stops play here
+            }
+        }
+
+        static void Raise(Action handlers)
+        {
+            if (handlers == null) return;
+            try
+            {
+                handlers();
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
             }
         }
 

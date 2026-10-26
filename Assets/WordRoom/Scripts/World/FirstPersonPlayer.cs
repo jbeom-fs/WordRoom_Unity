@@ -59,6 +59,13 @@ namespace WordRoom.World
         /// <summary>Placed, cursor locked, the game focused and no menu open: the state in which look and key input are read.</summary>
         public bool HasControlFocus => Placed && CursorLocked && Application.isFocused && InputAllowed;
 
+        /// <summary>
+        /// The player reads walking input now: HasControlFocus (placed and enabled, cursor locked, window focused, no
+        /// menu block and not in the frame a block was lifted) and walking not locked. Same conditions as the input
+        /// reading in Update, so nothing counts as playable before the player can really be played.
+        /// </summary>
+        public bool CanTakeInput => HasControlFocus && !movementLocked;
+
         /// <summary>Escape releases the cursor here (default). Off when a game menu handles Escape instead.</summary>
         public bool HandlesEscape { get; set; } = true;
 

@@ -107,46 +107,96 @@ namespace WordRoom.EditorTools
             new Link("label", "Text", typeof(TextMeshProUGUI)),
         };
 
+        static readonly Link[] ResultLinks =
+        {
+            new Link("display", "", typeof(GameObject)),
+            new Link("canvas", "", typeof(Canvas)),
+            new Link("timeText", "Result/TimeRow/Value", typeof(TextMeshProUGUI)),
+            new Link("visitedText", "Result/VisitedRow/Value", typeof(TextMeshProUGUI)),
+            new Link("mainMenuButton", "Result/MainMenuButton", typeof(Button)),
+        };
+
         sealed class UiPrefabs
         {
-            public GameObject Settings, MainMenu, GameMenu, Hud, Hint;
+            public GameObject Settings, MainMenu, GameMenu, Hud, Hint, Result;
         }
 
         [MenuItem("WordRoom/메인 메뉴와 게임 설정 구성")]
         public static void Setup()
         {
-            if (EditorApplication.isPlayingOrWillChangePlaymode)
-            {
-                Debug.LogError("[메뉴 구성] Play 중에는 실행하지 않습니다.");
-                return;
-            }
-            var font = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(FontPath);
             var room = AssetDatabase.LoadAssetAtPath<GameObject>(RoomPrefabPath);
-            if (font == null || room == null || !File.Exists(DevScenePath))
+            if (room == null || !File.Exists(DevScenePath))
             {
-                Debug.LogError($"[메뉴 구성] 필요한 자산이 없습니다: 폰트 {(font != null ? "있음" : FontPath)}, 방 프리팹 {(room != null ? "있음" : RoomPrefabPath)}, 개발용 씬 {(File.Exists(DevScenePath) ? "있음" : DevScenePath)}");
+                Debug.LogError($"[메뉴 구성] 필요한 자산이 없습니다: 방 프리팹 {(room != null ? "있음" : RoomPrefabPath)}, 개발용 씬 {(File.Exists(DevScenePath) ? "있음" : DevScenePath)}");
                 return;
             }
-            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
-            var returnTo = SceneManager.GetActiveScene().path;
-            var notes = new List<string>();
-            var saved = new List<string>();
-            try
+            Run("메뉴 구성", (font, notes, saved) =>
             {
                 var ui = EnsurePrefabs(font, notes, saved);
                 SetupGameplay(ui, notes, saved);
                 SetupDevScene(ui, notes, saved);
                 SetupMainMenu(room, ui, notes, saved);
                 SetupBuildScenes(notes, saved);
+            });
+        }
+
+        /// <summary>
+        /// Only the goal result of the existing Gameplay scene: the ResultCanvas prefab (built only when missing), one
+        /// placed instance and the ResultScreen references. Nothing else of any scene or prefab is checked or changed
+        /// (no other UI, no value move, no materials); Gameplay is never made or copied here.
+        /// </summary>
+        [MenuItem("WordRoom/결과 화면 구성")]
+        public static void SetupResultScreen()
+        {
+            if (!File.Exists(GameplayPath))
+            {
+                Debug.LogError($"[결과 구성] {GameplayPath}가 없습니다. 먼저 WordRoom/메인 메뉴와 게임 설정 구성을 실행하세요(이 메뉴는 씬을 만들지 않음).");
+                return;
+            }
+            Run("결과 구성", (font, notes, saved) =>
+            {
+                var temporary = false;
+                var prefab = LoadOrBuild(ArchiveUiBuilder.ResultPrefabPath, ArchiveUiBuilder.BuildResultCanvas, typeof(Canvas), notes, saved, ref temporary);
+                var start = notes.Count;
+                var scene = EditorSceneManager.OpenScene(GameplayPath, OpenSceneMode.Single);
+                var games = Object.FindObjectsByType<RoomGenerationDebug>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+                if (games.Length != 1) throw new InvalidOperationException($"Gameplay 씬의 RoomGenerationDebug가 {games.Length}개입니다(하나여야 함)");
+                SetupResult(games[0], games[0].GetComponent<PauseMenu>(), prefab, scene, notes);
+                SaveIfChanged(scene, GameplayPath, start, notes, saved);
+            });
+        }
+
+        /// <summary>Shared frame of the menus: checks, scene save prompt, log of changes and saved assets, reopening the previous scene.</summary>
+        static void Run(string tag, Action<TMP_FontAsset, List<string>, List<string>> body)
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                Debug.LogError($"[{tag}] Play 중에는 실행하지 않습니다.");
+                return;
+            }
+            var font = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(FontPath);
+            if (font == null)
+            {
+                Debug.LogError($"[{tag}] 필요한 자산이 없습니다: 폰트 {FontPath}");
+                return;
+            }
+            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
+            ArchiveUiBuilder.Font = font;
+            var returnTo = SceneManager.GetActiveScene().path;
+            var notes = new List<string>();
+            var saved = new List<string>();
+            try
+            {
+                body(font, notes, saved);
                 var warnings = notes.Count(n => n.StartsWith(Warning));
-                var log = "[메뉴 구성] 완료: " + (notes.Count > 0 ? string.Join(" / ", notes) : "바꿀 항목이 없습니다") +
+                var log = $"[{tag}] 완료: " + (notes.Count > 0 ? string.Join(" / ", notes) : "바꿀 항목이 없습니다") +
                           $"\n저장: {(saved.Count > 0 ? string.Join(", ", saved) : "없음")}";
                 if (warnings > 0) Debug.LogWarning(log + $"\n주의 {warnings}건은 직접 확인하세요(도구는 삭제·교체하지 않았습니다).");
                 else Debug.Log(log);
             }
             catch (Exception e)
             {
-                Debug.LogError($"[메뉴 구성] 중단 — {e.Message}\n저장된 항목: {(saved.Count > 0 ? string.Join(", ", saved) : "없음")}. " +
+                Debug.LogError($"[{tag}] 중단 — {e.Message}\n저장된 항목: {(saved.Count > 0 ? string.Join(", ", saved) : "없음")}. " +
                                "그 밖의 변경은 저장하지 않았습니다(중단 시점에 열려 있던 씬의 미저장 변경은 이전 씬을 다시 열면서 버려집니다)." +
                                (notes.Count > 0 ? $"\n진행 기록: {string.Join(" / ", notes)}" : ""));
             }
@@ -158,41 +208,45 @@ namespace WordRoom.EditorTools
         }
 
         // ---- prefabs ------------------------------------------------------------------------------------------
-        /// <summary>Loads each UI prefab; builds and saves only the missing ones (in a temporary empty scene).</summary>
+        /// <summary>
+        /// The prefab at `path` as it is (never rebuilt or overwritten), or, when missing, built and saved in a
+        /// temporary empty scene (opened once per run: builds never touch a project scene).
+        /// </summary>
+        static GameObject LoadOrBuild(string path, Func<GameObject> build, Type marker, List<string> notes, List<string> saved, ref bool temporary)
+        {
+            var existing = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+            if (existing != null)
+            {
+                if (marker != null && existing.GetComponent(marker) == null)
+                    throw new InvalidOperationException($"{path}에 {marker.Name} 컴포넌트가 없습니다(기존 프리팹은 덮어쓰지 않음). 고치거나 옮긴 뒤 다시 실행하세요");
+                return existing;
+            }
+            if (!temporary)
+            {
+                EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+                temporary = true;
+            }
+            EnsureFolder(ArchiveUiBuilder.PrefabFolder);
+            var root = build();
+            try
+            {
+                var asset = PrefabUtility.SaveAsPrefabAsset(root, path, out var ok);
+                if (!ok || asset == null) throw new InvalidOperationException($"{path} 프리팹을 저장하지 못했습니다");
+                saved.Add(path);
+                notes.Add($"프리팹 생성: {path}");
+                return asset;
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        /// <summary>Loads each UI prefab; builds and saves only the missing ones.</summary>
         static UiPrefabs EnsurePrefabs(TMP_FontAsset font, List<string> notes, List<string> saved)
         {
-            ArchiveUiBuilder.Font = font;
             var temporary = false;
-
-            GameObject Load(string path, Func<GameObject> build, Type marker)
-            {
-                var existing = AssetDatabase.LoadAssetAtPath<GameObject>(path);
-                if (existing != null)
-                {
-                    if (marker != null && existing.GetComponent(marker) == null)
-                        throw new InvalidOperationException($"{path}에 {marker.Name} 컴포넌트가 없습니다(기존 프리팹은 덮어쓰지 않음). 고치거나 옮긴 뒤 다시 실행하세요");
-                    return existing;
-                }
-                if (!temporary)
-                {
-                    EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);   // builds never touch a project scene
-                    temporary = true;
-                }
-                EnsureFolder(ArchiveUiBuilder.PrefabFolder);
-                var root = build();
-                try
-                {
-                    var asset = PrefabUtility.SaveAsPrefabAsset(root, path, out var ok);
-                    if (!ok || asset == null) throw new InvalidOperationException($"{path} 프리팹을 저장하지 못했습니다");
-                    saved.Add(path);
-                    notes.Add($"프리팹 생성: {path}");
-                    return asset;
-                }
-                finally
-                {
-                    Object.DestroyImmediate(root);
-                }
-            }
+            GameObject Load(string path, Func<GameObject> build, Type marker) => LoadOrBuild(path, build, marker, notes, saved, ref temporary);
 
             var ui = new UiPrefabs();
             ui.Settings = Load(ArchiveUiBuilder.SettingsPrefabPath, ArchiveUiBuilder.BuildSettingsPanel, typeof(SettingsPanel));
@@ -200,6 +254,7 @@ namespace WordRoom.EditorTools
             ui.GameMenu = Load(ArchiveUiBuilder.GameMenuPrefabPath, () => ArchiveUiBuilder.BuildGameMenuCanvas(ui.Settings), typeof(Canvas));
             ui.Hud = Load(ArchiveUiBuilder.HudPrefabPath, ArchiveUiBuilder.BuildHudCanvas, typeof(Canvas));
             ui.Hint = Load(ArchiveUiBuilder.HintPrefabPath, () => ArchiveUiBuilder.BuildPlayHintCanvas(EnsureHintMaterial(font, notes, saved)), typeof(Canvas));
+            ui.Result = Load(ArchiveUiBuilder.ResultPrefabPath, ArchiveUiBuilder.BuildResultCanvas, typeof(Canvas));
             return ui;
         }
 
@@ -255,6 +310,7 @@ namespace WordRoom.EditorTools
             LegacyUiMigration.Menu(pause, menuLink, "Gameplay", notes, saved);
             Ensure<UiSound>(go, "Gameplay", notes);
             SetupHudAndHint(game, ui, scene, "Gameplay", notes, saved);
+            SetupResult(game, pause, ui.Result, scene, notes);
             EnsureEventSystem("Gameplay", notes);
             EnsureListener(game.Player != null ? game.Player.GetComponentInChildren<Camera>(true) : Camera.main, "Gameplay", notes);
             SaveIfChanged(scene, GameplayPath, start, notes, saved);
@@ -333,6 +389,32 @@ namespace WordRoom.EditorTools
             if (hud != null) LegacyUiMigration.Hud(hud, Connect(hud, ui.Hud, HudLinks, scene, label, "HUD Canvas", notes), label, notes, saved);
             var hint = Controller<PlayHint>(game, "hint", label, notes);
             if (hint != null) LegacyUiMigration.Hint(hint, Connect(hint, ui.Hint, HintLinks, scene, label, "PlayHint Canvas", notes), label, notes, saved);
+        }
+
+        /// <summary>
+        /// Gameplay's goal result: the only ResultScreen of the scene (added to the generator's object when there is
+        /// none; several are reported and left alone), its generator/menu references when empty, and one Result Canvas
+        /// instance (placed inactive when new). No value move, no material: the result UI never existed before.
+        /// </summary>
+        static void SetupResult(RoomGenerationDebug game, PauseMenu pause, GameObject prefab, Scene scene, List<string> notes)
+        {
+            var all = Object.FindObjectsByType<ResultScreen>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            if (all.Length > 1)
+            {
+                notes.Add($"{Warning}Gameplay: ResultScreen이 {all.Length}개입니다({string.Join(", ", all.Select(r => $"'{PathOf(r.gameObject)}'"))}). 결과 화면 구성을 중단했습니다(삭제하지 않음)");
+                return;
+            }
+            ResultScreen result;
+            if (all.Length == 1) result = all[0];
+            else
+            {
+                result = game.gameObject.AddComponent<ResultScreen>();
+                notes.Add("Gameplay: ResultScreen 추가");
+            }
+            FillIfEmpty(result, "game", game, "Gameplay: 결과 화면 → 방 생성 제어 연결", notes);
+            if (pause != null) FillIfEmpty(result, "pauseMenu", pause, "Gameplay: 결과 화면 → 게임 메뉴 연결", notes);
+            var link = Connect(result, prefab, ResultLinks, scene, "Gameplay", "Result Canvas", notes);
+            if (link.Placed != null) link.Placed.SetActive(false);            // hidden until the goal
         }
 
         static T Controller<T>(RoomGenerationDebug game, string field, string label, List<string> notes) where T : Component

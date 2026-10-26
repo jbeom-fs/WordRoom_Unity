@@ -29,10 +29,11 @@ namespace WordRoom.EditorTools
         public const string GameMenuPrefabPath = PrefabFolder + "/GameMenuCanvas.prefab";
         public const string HudPrefabPath = PrefabFolder + "/HudCanvas.prefab";
         public const string HintPrefabPath = PrefabFolder + "/PlayHintCanvas.prefab";
+        public const string ResultPrefabPath = PrefabFolder + "/ResultCanvas.prefab";
         /// <summary>Outline preset for PlayHint (TMP shows presets named after the font). Saved as an asset so the outline survives in the prefab.</summary>
         public const string HintMaterialPath = "Assets/Font/Pretendard-Black SDF - Outline.mat";
 
-        public const int HudOrder = 50, HintOrder = 100, MainMenuOrder = 100, GameMenuOrder = 200;
+        public const int HudOrder = 50, HintOrder = 100, MainMenuOrder = 100, GameMenuOrder = 200, ResultOrder = 300;
 
         const float LabelWidth = 250f;
         const float ValueWidth = 130f;
@@ -184,6 +185,44 @@ namespace WordRoom.EditorTools
 
             AddSettings(root.transform, settingsPrefab);
             return root;
+        }
+
+        /// <summary>
+        /// Goal result canvas (order 300, above the game menu): dim overlay catching clicks, a centered framed panel
+        /// with 목표 달성, the 소요 시간 and 방문 방 수 rows (values written by ResultScreen) and the 메인 메뉴 button.
+        /// The root (ResultScreen.display, with its Canvas as ResultScreen.canvas) is saved active and enabled; the
+        /// scene instance is placed inactive and ResultScreen shows it only after checking that Canvas and the button.
+        /// </summary>
+        public static GameObject BuildResultCanvas()
+        {
+            var root = CanvasRoot("Result Canvas", ResultOrder, true);
+            var overlay = NewRect("Overlay", root.transform);
+            Stretch(overlay);
+            AddImage(overlay.gameObject, ArchiveUi.Dim, true);                // clicks never reach the game
+
+            var panel = Panel(root.transform, "Result");
+            Center(panel, 560f);
+            Vertical(panel, 20f, 48, TextAnchor.UpperCenter);
+            var title = AddText(panel, "Title", "목표 달성", 56f, ArchiveUi.Ivory, TextAlignmentOptions.Center);
+            Size(title.gameObject, 464f, 80f);
+            ResultRow(panel, "TimeRow", "소요 시간", "00:00");
+            ResultRow(panel, "VisitedRow", "방문 방 수", "1개");
+            var spacer = NewRect("Spacer", panel);
+            Size(spacer.gameObject, 464f, 8f);
+            AddButton(panel, "MainMenuButton", "메인 메뉴", 360f, 68f, 28f);
+            return root;
+        }
+
+        /// <summary>Label (left) and value (right, child "Value") in one 464×52 row.</summary>
+        static void ResultRow(RectTransform panel, string name, string label, string preview)
+        {
+            var row = NewRect(name, panel);
+            Horizontal(row, 12f, TextAnchor.MiddleLeft);
+            Size(row.gameObject, 464f, RowHeight);
+            var l = AddText(row, "Label", label, 26f, ArchiveUi.IvoryDim, TextAlignmentOptions.Left);
+            Size(l.gameObject, 200f, RowHeight);
+            var v = AddText(row, "Value", preview, 32f, ArchiveUi.Ivory, TextAlignmentOptions.Right);
+            Size(v.gameObject, 252f, RowHeight);
         }
 
         /// <summary>

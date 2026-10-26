@@ -216,3 +216,74 @@ UiSound는 외부 음원 없이 짧은 클릭음을 만든다. 효과음은 기�
 - 중첩 설정 패널은 SettingsPanel 원본을 따른다. 바깥 프리팹·씬에 두께 override는 없었다.
 - MainMenu 씬에서 사용자가 Main·Difficulty 패널과 시작·설정·종료 버튼의 프레임 20개를 override로 이미 4로 지정해 두었다. 이 씬 값은 그대로 두었다(이제 원본과 같은 값).
 - `ArchiveUiBuilder.FrameThickness = 4`로 새로 만드는 프레임도 맞췄다. 프레임이 없는 PlayHint는 대상이 아니다.
+
+## 10. 목표 도달 결과 화면 (2026-10-26, 작업 트리·미커밋)
+
+**상태: 코드·구성 도구 작성 완료 / 프리팹·씬 적용 대기 / 실행 확인 전.** 결과 프리팹과 Gameplay 씬 배치는 사용자가 `WordRoom/결과 화면 구성`(또는 전체 구성 메뉴)을 실행해야 생긴다. 적용 전에는 ResultScreen이 없으므로 기존처럼 "목표 도달" 안내와 Esc 메뉴의 메인 메뉴 복귀가 남는다.
+
+### 10.1 확정 기준
+
+| 항목 | 기준 |
+|---|---|
+| 표시 | 목표 달성, 소요 시간, 방문 방 수, 메인 메뉴 버튼. 일반 단독 플레이(Gameplay)에서 목표 방 실제 입장 성공 시 |
+| 시간 시작 | 시작 방 표시·바닥 확인·배치가 성공한 뒤 처음 조작 가능한 프레임. 로딩·최초 생성·배치 대기 제외. 그때 Esc 메뉴가 열려 있으면 닫혀 조작 가능해질 때까지 미룸. 첫 입력을 기다리지 않음 |
+| 시간 종료 | 목표 방 입장 요청의 경계 통과 감지 시각. 그 요청이 입장 수락·표시·도착 바닥 확인까지 성공한 경우에만 사용. 작업 스레드·표시 시간은 포함하지 않음 |
+| 포함 | 측정 시작 후의 Esc 메뉴·설정 체류, 방 생성 대기 |
+| 방문 방 수 | RoomMap.UniqueVisited: 시작·목표 방 포함 고유 방문 좌표 수. 재방문·문 열기·생성·표시로 늘지 않음 |
+| 표시 형식 | 초 미만 버림. 1시간 미만 MM:SS, 이상 HH:MM:SS. 표시할 때 한 번만 포맷 |
+| 제외 | 협동 결과·이름·순위·재도전·기록 저장. 중도 메인 복귀·오류 정지는 성공 아님 |
+
+### 10.2 구현 구조
+
+- `RoomDebug/GoalResult.cs`: 고정된 Seconds·VisitedRooms만 담는 읽기 전용 결과.
+- `RoomGenerationDebug`(최소 변경):
+  - 측정 시작을 실험당 한 번 기록. 기준은 `FirstPersonPlayer.CanTakeInput`(10.5절에서 HasControlFocus 기반으로 변경, LateUpdate에서 검사).
+  - EnterRoom 시작 시 `Time.realtimeSinceStartupAsDouble`로 경계 통과 시각을 보관. 입장 확인 후 `update.Arrived`면 결과를 한 번 확정해 `GoalReached`를 발생시킴.
+  - 새 실험이면 시각·결과·안내 생략 상태를 초기화하고 `ExperimentStarted`를 발생시킴.
+  - Time.timeScale은 바꾸지 않고, 측정 방식은 deltaTime 누적이 아닌 실시간 시각의 차이.
+- `RoomViewSnapshot.UniqueVisited`: 입장 요청과 같은 작업 스레드에서 캡처. 결과 UI는 RoomMap을 직접 읽지 않음.
+- `Game/ResultScreen.cs`: 이벤트를 구독해 표시·입력 차단·씬 전환을 맡음. 어셈블리 방향은 Game → RoomDebug만 쓰고 역참조는 없음. 개발용 씬에는 구독자가 없어 기존 "목표 도달" 안내가 유지됨.
+- 구독은 OnEnable·OnDisable에서 캐시한 delegate로 한 번만. 늦은 비동기 결과는 기존 토큰·생성기·플레이어 검사로 걸러지고, 씬 전환은 세션 전체를 폐기함.
+
+### 10.3 입력과 메뉴의 관계
+
+- 결과 표시 시 순서:
+  1. PauseMenu.Close()로 메뉴를 닫음(메뉴의 입력 해제가 먼저 일어남).
+  2. PauseMenu 컴포넌트를 끔. 이후 Esc는 메뉴를 열지도, 플레이로 되돌리지도 않음.
+  3. ResultScreen이 플레이어 입력을 차단(시점·걷기·E·클릭 잠금). 커서는 해제됨.
+- 생성 중 이동 잠금은 그대로 별도.
+- 화면 전체 Overlay가 클릭을 받아 게임에 전달되지 않음. HUD·월드는 배경으로 남음. `SuppressGoalHint`로 "목표 도달" 안내를 숨김.
+- 메인 메뉴 버튼:
+  - 클릭음 후 한 번만 동작. 버튼이 비활성화되고 `LoadScene(MainMenu)`로 세션이 폐기됨. 사용자 설정은 유지.
+  - 자동 복귀는 없음. DontDestroyOnLoad 관리자는 추가하지 않음.
+- 참조가 불완전하거나 표시 영역이 화면에 보이지 않으면 오류를 한 번 보고하고 아무것도 차단하지 않음. 안내와 Esc 메뉴 경로는 그대로 남음.
+- 새 실험(ExperimentStarted)이나 컴포넌트 비활성화 때 결과 화면을 숨기고 입력·메뉴를 되돌림.
+
+### 10.4 프리팹·구성 도구
+
+- `ArchiveUiBuilder.BuildResultCanvas` → `Assets/Prefabs/UI/ResultCanvas.prefab`. 구성은 Canvas 300, Raycaster, Dim Overlay, 프레임 4 패널(목표 달성 / 소요 시간 / 방문 방 수 / 메인 메뉴).
+- `WordRoom/결과 화면 구성`(신규)이 하는 일:
+  - 기존 Gameplay 씬만 열어 결과 프리팹(없을 때만 생성)과 인스턴스 1개(새로 배치하면 비활성)를 둠.
+  - ResultScreen과 그 참조(game·pauseMenu·화면)를 연결.
+  - 다른 UI 검사, 값 이전, 머티리얼 생성, Gameplay 복사는 하지 않음.
+  - 전체 구성 메뉴에도 같은 단계가 들어 있음.
+- 재실행 시 빈 참조만 채움. ResultScreen 중복과 인스턴스 중복·혼합 참조는 경고만 하고 바꾸지 않음.
+
+### 10.5 검토 반영 (2026-10-26, 작업 트리·미커밋 / 실행 확인 전)
+
+현재 상태: 사용자가 결과 구성 메뉴를 실행해 `ResultCanvas.prefab`과 Gameplay 배치가 생겼다. 이번에 추가한 `ResultScreen.canvas` 참조는 아직 비어 있으므로 **`WordRoom/결과 화면 구성`을 다시 실행해야 채워진다**. 그 전에는 ResultScreen이 참조 누락을 한 번 보고하고 결과 화면을 쓰지 않는다(안내·Esc 복귀 유지).
+
+- **측정 시작 기준 변경:** 시작 조건은 `FirstPersonPlayer.CanTakeInput`이며 정의는 `HasControlFocus`(배치·활성, 커서 잠금, 창 포커스, 메뉴 차단·해제 유예 없음) && 이동 잠금 없음이다. 실제 입력 판정과 같은 조건이다.
+  - 검사는 RoomGenerationDebug.LateUpdate에서 한다. 모든 Update가 끝난 뒤라 스크립트 실행 순서를 지정할 필요가 없다.
+  - 시작 전 포커스 상실·커서 해제·메뉴 열림이면 시작하지 않는다. 시작한 뒤에는 멈추거나 다시 시작하지 않는다.
+- **결과 화면 사용 조건:**
+  - 목표 도달 시점에 참조를 다시 검사한다(game·display·canvas·두 값 텍스트·메인 메뉴 버튼).
+  - display를 켠 뒤 아래를 모두 확인한다.
+    - display가 계층에서 활성
+    - Canvas가 display 아래에 있고 켜져 있음
+    - 버튼이 display 아래에 있고 활성·누를 수 있음(Interactable·CanvasGroup)
+  - 하나라도 아니면 display를 원래대로 돌리고, 오류를 한 번 보고하고, 아무것도 넘기지 않는다. 꺼진 Canvas나 버튼을 강제로 켜지 않는다.
+- **넘기는 순서와 되돌리기:**
+  - 사용 가능할 때만 순서대로 진행한다: PauseMenu 닫기·끄기 → 입력 차단·커서 해제 → 안내 생략·shown 확정.
+  - 도중 예외가 나면 이번에 얻은 차단만 풀고, PauseMenu 활성 상태와 안내 생략 값을 진입 전 값으로 되돌린다. 이미 닫힌 Esc 메뉴는 다시 열지 않는다(Esc로 다시 열 수 있음).
+  - Hide도 진입 전 값으로 복원하며 PauseMenu를 무조건 켜지 않는다.
