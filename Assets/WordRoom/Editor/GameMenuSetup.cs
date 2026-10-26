@@ -116,9 +116,16 @@ namespace WordRoom.EditorTools
             new Link("mainMenuButton", "Result/MainMenuButton", typeof(Button)),
         };
 
+        static readonly Link[] MapLinks =
+        {
+            new Link("display", "", typeof(GameObject)),
+            new Link("canvas", "", typeof(Canvas)),
+            new Link("view", "", typeof(MapView)),
+        };
+
         sealed class UiPrefabs
         {
-            public GameObject Settings, MainMenu, GameMenu, Hud, Hint, Result;
+            public GameObject Settings, MainMenu, GameMenu, Hud, Hint, Result, Map;
         }
 
         [MenuItem("WordRoom/메인 메뉴와 게임 설정 구성")]
@@ -162,6 +169,33 @@ namespace WordRoom.EditorTools
                 var games = Object.FindObjectsByType<RoomGenerationDebug>(FindObjectsInactive.Include, FindObjectsSortMode.None);
                 if (games.Length != 1) throw new InvalidOperationException($"Gameplay 씬의 RoomGenerationDebug가 {games.Length}개입니다(하나여야 함)");
                 SetupResult(games[0], games[0].GetComponent<PauseMenu>(), prefab, scene, notes);
+                SaveIfChanged(scene, GameplayPath, start, notes, saved);
+            });
+        }
+
+        /// <summary>
+        /// Only the map of the existing Gameplay scene: the MapCanvas prefab (built only when missing, with its word pool),
+        /// one placed instance (inactive when new), the MapScreen references, and the game menu's and result screen's
+        /// links to it when those are empty. Nothing else is checked or changed (no other UI, no value move, no
+        /// materials); Gameplay is never made or copied here.
+        /// </summary>
+        [MenuItem("WordRoom/지도 화면 구성")]
+        public static void SetupMapScreen()
+        {
+            if (!File.Exists(GameplayPath))
+            {
+                Debug.LogError($"[지도 구성] {GameplayPath}가 없습니다. 먼저 WordRoom/메인 메뉴와 게임 설정 구성을 실행하세요(이 메뉴는 씬을 만들지 않음).");
+                return;
+            }
+            Run("지도 구성", (font, notes, saved) =>
+            {
+                var temporary = false;
+                var prefab = LoadOrBuild(ArchiveUiBuilder.MapPrefabPath, ArchiveUiBuilder.BuildMapCanvas, typeof(MapView), notes, saved, ref temporary);
+                var start = notes.Count;
+                var scene = EditorSceneManager.OpenScene(GameplayPath, OpenSceneMode.Single);
+                var games = Object.FindObjectsByType<RoomGenerationDebug>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+                if (games.Length != 1) throw new InvalidOperationException($"Gameplay 씬의 RoomGenerationDebug가 {games.Length}개입니다(하나여야 함)");
+                SetupMap(games[0], games[0].GetComponent<PauseMenu>(), prefab, scene, notes);
                 SaveIfChanged(scene, GameplayPath, start, notes, saved);
             });
         }
@@ -255,6 +289,7 @@ namespace WordRoom.EditorTools
             ui.Hud = Load(ArchiveUiBuilder.HudPrefabPath, ArchiveUiBuilder.BuildHudCanvas, typeof(Canvas));
             ui.Hint = Load(ArchiveUiBuilder.HintPrefabPath, () => ArchiveUiBuilder.BuildPlayHintCanvas(EnsureHintMaterial(font, notes, saved)), typeof(Canvas));
             ui.Result = Load(ArchiveUiBuilder.ResultPrefabPath, ArchiveUiBuilder.BuildResultCanvas, typeof(Canvas));
+            ui.Map = Load(ArchiveUiBuilder.MapPrefabPath, ArchiveUiBuilder.BuildMapCanvas, typeof(MapView));
             return ui;
         }
 
@@ -311,6 +346,7 @@ namespace WordRoom.EditorTools
             Ensure<UiSound>(go, "Gameplay", notes);
             SetupHudAndHint(game, ui, scene, "Gameplay", notes, saved);
             SetupResult(game, pause, ui.Result, scene, notes);
+            SetupMap(game, pause, ui.Map, scene, notes);
             EnsureEventSystem("Gameplay", notes);
             EnsureListener(game.Player != null ? game.Player.GetComponentInChildren<Camera>(true) : Camera.main, "Gameplay", notes);
             SaveIfChanged(scene, GameplayPath, start, notes, saved);
@@ -415,6 +451,55 @@ namespace WordRoom.EditorTools
             if (pause != null) FillIfEmpty(result, "pauseMenu", pause, "Gameplay: 결과 화면 → 게임 메뉴 연결", notes);
             var link = Connect(result, prefab, ResultLinks, scene, "Gameplay", "Result Canvas", notes);
             if (link.Placed != null) link.Placed.SetActive(false);            // hidden until the goal
+        }
+
+        /// <summary>
+        /// Gameplay's map: the only MapScreen of the scene (added to the generator's object when there is none; several
+        /// are reported and left alone), its generator / game menu / 3D view references when empty, one Map Canvas
+        /// instance (placed inactive when new), and the game menu's and result screen's `map` when empty.
+        /// </summary>
+        static void SetupMap(RoomGenerationDebug game, PauseMenu pause, GameObject prefab, Scene scene, List<string> notes)
+        {
+            var all = Object.FindObjectsByType<MapScreen>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            if (all.Length > 1)
+            {
+                notes.Add($"{Warning}Gameplay: MapScreen이 {all.Length}개입니다({string.Join(", ", all.Select(m => $"'{PathOf(m.gameObject)}'"))}). 지도 구성을 중단했습니다(삭제하지 않음)");
+                return;
+            }
+            MapScreen map;
+            if (all.Length == 1) map = all[0];
+            else
+            {
+                map = game.gameObject.AddComponent<MapScreen>();
+                notes.Add("Gameplay: MapScreen 추가");
+            }
+            FillIfEmpty(map, "game", game, "Gameplay: 지도 → 방 생성 제어 연결", notes);
+            if (pause != null) FillIfEmpty(map, "pauseMenu", pause, "Gameplay: 지도 → 게임 메뉴 연결", notes);
+            var world = game.GetComponent<RoomWorldView>();
+            if (world != null) FillIfEmpty(map, "worldView", world, "Gameplay: 지도 → 3D 방 표시 연결", notes);
+            else notes.Add($"{Warning}Gameplay: '{PathOf(game.gameObject)}'에 RoomWorldView가 없어 MapScreen.worldView를 연결하지 않았습니다");
+            var link = Connect(map, prefab, MapLinks, scene, "Gameplay", "Map Canvas", notes);
+            if (link.Placed != null) link.Placed.SetActive(false);            // closed until Tab
+            if (pause != null) LinkToMap(pause, "게임 메뉴", map, notes);
+            var results = Object.FindObjectsByType<ResultScreen>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            if (results.Length == 1) LinkToMap(results[0], "결과 화면", map, notes);
+            else if (results.Length > 1) notes.Add($"{Warning}Gameplay: ResultScreen이 {results.Length}개라 결과 화면의 지도 연결을 하지 않았습니다");
+        }
+
+        /// <summary>`owner.map` = `map` when empty; a different map already set is reported, not replaced.</summary>
+        static void LinkToMap(Component owner, string label, MapScreen map, List<string> notes)
+        {
+            var so = new SerializedObject(owner);
+            var p = so.FindProperty("map") ?? throw new InvalidOperationException($"{owner.GetType().Name}에 'map' 필드가 없습니다");
+            if (p.objectReferenceValue == map) return;
+            if (p.objectReferenceValue != null)
+            {
+                notes.Add($"{Warning}Gameplay: {label} '{PathOf(owner.gameObject)}'의 map이 다른 지도 '{PathOf(((Component)p.objectReferenceValue).gameObject)}'를 가리킵니다(바꾸지 않음)");
+                return;
+            }
+            p.objectReferenceValue = map;
+            so.ApplyModifiedPropertiesWithoutUndo();
+            notes.Add($"Gameplay: {label} → 지도 연결");
         }
 
         static T Controller<T>(RoomGenerationDebug game, string field, string label, List<string> notes) where T : Component

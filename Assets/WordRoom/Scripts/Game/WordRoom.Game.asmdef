@@ -3,6 +3,7 @@
     "rootNamespace": "WordRoom.Game",
     "references": [
         "WordRoom.Data",
+        "WordRoom.Generation",
         "WordRoom.Unity",
         "WordRoom.World",
         "WordRoom.RoomDebug",

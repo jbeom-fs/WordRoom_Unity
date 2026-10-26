@@ -19,6 +19,8 @@ namespace WordRoom.Game
     /// closing, the player takes input again from the next frame and locks the cursor only if it is placed. Time is
     /// not paused; a request already running may finish. 메인 메뉴 leaves the scene, which ends the session (its map
     /// and doors are dropped; preferences stay).
+    /// With a map: an Escape while the map is open only closes the map (this press opens nothing), and the menu never
+    /// opens over the map; the map itself refuses to open while this menu is open.
     /// The menu is the scene's GameMenu Canvas (a prefab instance saved in the scene, inactive while closed); this
     /// component only switches it and handles its clicks, with listeners added once in Awake. When its references
     /// are incomplete it reports once and leaves Escape to the player (cursor release), so play is never stuck.
@@ -42,6 +44,8 @@ namespace WordRoom.Game
         [SerializeField] Button settingsButton;
         [SerializeField] Button mainMenuButton;
         [SerializeField] Button quitButton;
+        [Tooltip("지도(선택). 열려 있으면 Esc가 지도만 닫고 메뉴는 열지 않습니다.")]
+        [SerializeField] MapScreen map;
 
 #pragma warning disable CS0414, CS0649   // read and written only by the Editor setup (SerializedObject), never at runtime
         // Value saved by the former runtime-built menu (field "font"), moved once onto this scene's canvas instance.
@@ -57,6 +61,12 @@ namespace WordRoom.Game
         bool leaving;
 
         public bool IsOpen => open;
+
+        /// <summary>The map whose Escape this menu handles first (null = no map in the scene).</summary>
+        public MapScreen Map => map;
+
+        /// <summary>This menu reads Escape now (references complete and the component enabled).</summary>
+        public bool OwnsEscape => ready && isActiveAndEnabled;
 
         void Awake()
         {
@@ -102,6 +112,11 @@ namespace WordRoom.Game
             if (open && blocked != CurrentPlayer) Block(CurrentPlayer);      // the player was replaced while open
             var kb = Keyboard.current;
             if (leaving || kb == null || !kb.escapeKey.wasPressedThisFrame) return;
+            if (map != null && map.IsOpen)
+            {
+                map.Close();                                                 // this press only closes the map
+                return;
+            }
             if (!open) Open();
             else if (settings.IsOpen) settings.Close();
             else Close();
@@ -118,6 +133,7 @@ namespace WordRoom.Game
         public void Open()
         {
             if (!ready || open || leaving) return;
+            if (map != null && map.IsOpen) return;                           // never together with the map
             open = true;
             menuRoot.SetActive(true);
             Block(CurrentPlayer);

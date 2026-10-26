@@ -539,6 +539,24 @@ namespace WordRoom.World
             Debug.Log(sb.ToString());
         }
 
+        /// <summary>
+        /// Where `target` stands on the map, in the same layout as RoomOrigin (GridPos X = world +X = 우, Y = world +Z =
+        /// 상; one unit per room, room centers on whole numbers), and its horizontal heading in degrees clockwise from
+        /// 상 (pitch ignored). False before the view is prepared or when the forward has no horizontal part.
+        /// </summary>
+        public bool TryGetMapPose(Transform target, out UnityEngine.Vector2 position, out float heading)
+        {
+            position = default;
+            heading = 0f;
+            if (!ready || target == null || spacing <= 0f) return false;
+            var p = target.position - origin;
+            position = new UnityEngine.Vector2(p.x / spacing, p.z / spacing);
+            var f = target.forward;
+            if (f.x * f.x + f.z * f.z < 1e-8f) return false;
+            heading = Mathf.Atan2(f.x, f.z) * Mathf.Rad2Deg;
+            return true;
+        }
+
         // ---- rent / return ----------------------------------------------------------------------------------
         Vector3 RoomOrigin(GridPos p) => origin + new Vector3(p.X * spacing, 0f, p.Y * spacing);
 

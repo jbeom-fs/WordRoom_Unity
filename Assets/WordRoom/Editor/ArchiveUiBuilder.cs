@@ -30,10 +30,18 @@ namespace WordRoom.EditorTools
         public const string HudPrefabPath = PrefabFolder + "/HudCanvas.prefab";
         public const string HintPrefabPath = PrefabFolder + "/PlayHintCanvas.prefab";
         public const string ResultPrefabPath = PrefabFolder + "/ResultCanvas.prefab";
+        public const string MapPrefabPath = PrefabFolder + "/MapCanvas.prefab";
+
+        /// <summary>
+        /// Word texts made once in the map prefab. The map viewport is about 1776×804 canvas units at UI size 100% and
+        /// 2256×1074 at 80%; with MapView.wordMinCell 100 MapGraphic.MaxCellsInRange gives (18+3)×(9+3) = 252 and
+        /// (23+3)×(11+3) = 364 cells. MapView raises the word size limit itself (and says so) when a viewport needs more.
+        /// </summary>
+        public const int MapWordPool = 364;
         /// <summary>Outline preset for PlayHint (TMP shows presets named after the font). Saved as an asset so the outline survives in the prefab.</summary>
         public const string HintMaterialPath = "Assets/Font/Pretendard-Black SDF - Outline.mat";
 
-        public const int HudOrder = 50, HintOrder = 100, MainMenuOrder = 100, GameMenuOrder = 200, ResultOrder = 300;
+        public const int HudOrder = 50, HintOrder = 100, MainMenuOrder = 100, MapOrder = 150, GameMenuOrder = 200, ResultOrder = 300;
 
         const float LabelWidth = 250f;
         const float ValueWidth = 130f;
@@ -211,6 +219,122 @@ namespace WordRoom.EditorTools
             Size(spacer.gameObject, 464f, 8f);
             AddButton(panel, "MainMenuButton", "메인 메뉴", 360f, 68f, 28f);
             return root;
+        }
+
+        /// <summary>
+        /// Map canvas (order 150: above the HUD and hint, below the game menu and the result). A framed walnut panel
+        /// 48 units inside the screen: header (지도, controls hint, 현재 위치, 닫기), the map viewport (#211A16 background
+        /// catching wheel and drag, RectMask2D, MapViewportInput) holding the MapGraphic, the word pool and the player
+        /// marker, and a legend. Buttons are outside the viewport, so pressing them never drags the map. MapView on the
+        /// root holds the parts. The root is saved active; the scene instance is placed inactive (MapScreen opens it).
+        /// </summary>
+        public static GameObject BuildMapCanvas()
+        {
+            var root = CanvasRoot("Map Canvas", MapOrder, true);
+            var panel = Panel(root.transform, "Map");
+            Stretch(panel, 48f);
+
+            var header = NewRect("Header", panel);
+            header.anchorMin = new Vector2(0f, 1f);
+            header.anchorMax = new Vector2(1f, 1f);
+            header.pivot = new Vector2(0.5f, 1f);
+            header.offsetMin = new Vector2(24f, -84f);
+            header.offsetMax = new Vector2(-24f, -12f);
+            Horizontal(header, 16f, TextAnchor.MiddleLeft);
+            var title = AddText(header, "Title", "지도", 36f, ArchiveUi.Ivory, TextAlignmentOptions.Left);
+            Size(title.gameObject, 120f, 72f);
+            var help = AddText(header, "Help", "Tab 또는 Esc: 닫기    휠: 확대/축소    드래그: 이동", 20f, ArchiveUi.IvoryDim, TextAlignmentOptions.Left);
+            Size(help.gameObject, -1f, 72f, 1f);
+            var recenter = AddButton(header, "RecenterButton", "현재 위치", 180f, 56f, 22f);
+            var close = AddButton(header, "CloseButton", "닫기", 140f, 56f, 22f);
+            recenter.navigation = close.navigation = new Navigation { mode = Navigation.Mode.None };   // WASD walks while the map is open, never moves a selection here
+
+            var viewport = NewRect("Viewport", panel);
+            Stretch(viewport);
+            viewport.offsetMin = new Vector2(24f, 84f);
+            viewport.offsetMax = new Vector2(-24f, -96f);
+            AddImage(viewport.gameObject, new Color32(0x21, 0x1A, 0x16, 255), true);     // #211A16, catches wheel and drag
+            viewport.gameObject.AddComponent<RectMask2D>();
+            var input = viewport.gameObject.AddComponent<MapViewportInput>();
+
+            var graphicRect = NewRect("Rooms", viewport);
+            Stretch(graphicRect);
+            var graphic = graphicRect.gameObject.AddComponent<MapGraphic>();
+            graphic.raycastTarget = false;
+
+            var wordRoot = NewRect("Words", viewport);
+            Stretch(wordRoot);
+            var words = new TextMeshProUGUI[MapWordPool];
+            for (var i = 0; i < words.Length; i++)
+            {
+                var t = AddText(wordRoot, $"Word{i:000}", "", 20f, ArchiveUi.Ivory, TextAlignmentOptions.Center);   // #F2EBDD
+                t.textWrappingMode = TextWrappingModes.NoWrap;
+                t.overflowMode = TextOverflowModes.Overflow;
+                t.rectTransform.anchorMin = t.rectTransform.anchorMax = t.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+                t.rectTransform.sizeDelta = new Vector2(90f, 30f);
+                t.enabled = false;
+                words[i] = t;
+            }
+
+            var markerRect = NewRect("Player", viewport);
+            markerRect.anchorMin = markerRect.anchorMax = markerRect.pivot = new Vector2(0.5f, 0.5f);
+            markerRect.sizeDelta = new Vector2(32f, 32f);
+            var marker = markerRect.gameObject.AddComponent<MapMarker>();
+            marker.color = new Color32(0x72, 0xFF, 0xD5, 255);                        // #72FFD5 bright mint
+            marker.raycastTarget = false;
+            marker.enabled = false;
+
+            var legend = NewRect("Legend", panel);
+            legend.anchorMin = new Vector2(0f, 0f);
+            legend.anchorMax = new Vector2(1f, 0f);
+            legend.pivot = new Vector2(0.5f, 0f);
+            legend.offsetMin = new Vector2(24f, 16f);
+            legend.offsetMax = new Vector2(-24f, 72f);
+            Horizontal(legend, 12f, TextAnchor.MiddleLeft);
+            var legendVisited = LegendItem(legend, "Visited", new Color32(0x80, 0x60, 0x47, 255), "방문한 방");     // #806047
+            var legendUnvisited = LegendItem(legend, "Unvisited", new Color32(0x30, 0x24, 0x1C, 255), "미방문 방"); // #30241C
+            var legendCurrent = LegendItem(legend, "Current", new Color32(0xD7, 0xB5, 0x68, 255), "현재 방 테두리");
+            var legendTarget = LegendItem(legend, "Target", new Color32(0x7D, 0xA5, 0x8D, 255), "목표 방 테두리와 별");
+            var legendPlayer = LegendItem(legend, "Player", new Color32(0x72, 0xFF, 0xD5, 255), "플레이어와 방향");
+            var legendLine = LegendItem(legend, "Line", new Color32(0x8C, 0x73, 0x55, 255), "연결");
+
+            var gso = new SerializedObject(graphic);                          // the swatches take the map colors when play starts
+            Set(gso, "visitedSwatch", legendVisited);
+            Set(gso, "unvisitedSwatch", legendUnvisited);
+            Set(gso, "currentSwatch", legendCurrent);
+            Set(gso, "targetSwatch", legendTarget);
+            Set(gso, "lineSwatch", legendLine);
+            gso.ApplyModifiedPropertiesWithoutUndo();
+
+            var view = root.AddComponent<MapView>();
+            var so = new SerializedObject(view);
+            Set(so, "playerSwatch", legendPlayer);
+            Set(so, "canvas", root.GetComponent<Canvas>());
+            Set(so, "viewport", viewport);
+            Set(so, "input", input);
+            Set(so, "graphic", graphic);
+            Set(so, "playerMarker", marker);
+            Set(so, "closeButton", close);
+            Set(so, "recenterButton", recenter);
+            var pool = so.FindProperty("words");
+            pool.arraySize = words.Length;
+            for (var i = 0; i < words.Length; i++) pool.GetArrayElementAtIndex(i).objectReferenceValue = words[i];
+            so.ApplyModifiedPropertiesWithoutUndo();
+            return root;
+        }
+
+        /// <summary>A 24×24 swatch and its label; the swatch is returned so the map colors can drive it.</summary>
+        static Image LegendItem(RectTransform legend, string name, Color32 color, string label)
+        {
+            var swatch = NewRect($"{name}Swatch", legend);
+            var image = AddImage(swatch.gameObject, color, false);
+            Size(swatch.gameObject, 24f, 24f);
+            var t = AddText(legend, $"{name}Label", label, 20f, ArchiveUi.IvoryDim, TextAlignmentOptions.Left);
+            Size(t.gameObject, -1f, 40f);
+            t.textWrappingMode = TextWrappingModes.NoWrap;
+            var spacer = NewRect($"{name}Gap", legend);
+            Size(spacer.gameObject, 12f, 1f);
+            return image;
         }
 
         /// <summary>Label (left) and value (right, child "Value") in one 464×52 row.</summary>

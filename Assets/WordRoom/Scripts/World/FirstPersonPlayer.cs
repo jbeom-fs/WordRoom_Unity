@@ -47,6 +47,7 @@ namespace WordRoom.World
         bool inputBlocked;
         int inputResumeFrame;
         bool relockOnResume;
+        bool mapMode;
 
         static bool CursorLocked => Cursor.lockState == CursorLockMode.Locked;
 
@@ -56,21 +57,55 @@ namespace WordRoom.World
         /// <summary>Not blocked by a menu, and not in the frame its closing input arrived.</summary>
         bool InputAllowed => !inputBlocked && Time.frameCount >= inputResumeFrame;
 
-        /// <summary>Placed, cursor locked, the game focused and no menu open: the state in which look and key input are read.</summary>
-        public bool HasControlFocus => Placed && CursorLocked && Application.isFocused && InputAllowed;
+        /// <summary>Placed, cursor locked, the game focused, no menu open and no map shown: the state in which mouse look is read.</summary>
+        public bool HasControlFocus => Placed && CursorLocked && Application.isFocused && InputAllowed && !mapMode;
 
         /// <summary>
-        /// The player reads walking input now: HasControlFocus (placed and enabled, cursor locked, window focused, no
-        /// menu block and not in the frame a block was lifted) and walking not locked. Same conditions as the input
-        /// reading in Update, so nothing counts as playable before the player can really be played.
+        /// Walking keys are read now: placed and enabled, window focused, no menu block and not in the frame a block or
+        /// the map mode was lifted, walking not locked, and the cursor locked — or the map mode on (the map keeps the
+        /// cursor free for itself while the player may walk).
         /// </summary>
-        public bool CanTakeInput => HasControlFocus && !movementLocked;
+        bool WalkInputAllowed => Placed && Application.isFocused && InputAllowed && !movementLocked && (CursorLocked || mapMode);
+
+        /// <summary>
+        /// The player can really be played now: exactly the walking condition read in Update (also with the map open
+        /// and the cursor free), so nothing counts as playable before walking works.
+        /// </summary>
+        public bool CanTakeInput => WalkInputAllowed;
+
+        /// <summary>
+        /// Map mode (set by the map screen while it is shown): the game keys go on — walking, gravity, aiming at doors and
+        /// E (CanInteract) — while mouse look and click-to-lock stop and the cursor stays free for the map. Separate from
+        /// the menu block (SetInputBlocked) and the generation lock (SetMovementLocked): turning it off lifts neither.
+        /// Turning it off skips input for one frame (the closing click or key never acts in the game), then resumes mouse
+        /// look and locks the cursor again only when no menu block is on.
+        /// </summary>
+        public void SetMapMode(bool on)
+        {
+            if (on)
+            {
+                mapMode = true;
+                return;
+            }
+            if (!mapMode) return;
+            mapMode = false;
+            inputResumeFrame = Time.frameCount + 1;                            // the closing click or key never acts in the game
+            relockOnResume = true;
+        }
 
         /// <summary>Escape releases the cursor here (default). Off when a game menu handles Escape instead.</summary>
         public bool HandlesEscape { get; set; } = true;
 
-        /// <summary>E pressed in this frame (once per press, holding does not repeat) while HasControlFocus.</summary>
-        public bool InteractPressed => HasControlFocus && Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame;
+        /// <summary>
+        /// Aiming at doors and E work now: placed and enabled, window focused, no menu block and not in the frame a block
+        /// or the map mode was lifted, and the cursor locked — or the map mode on (the map is an information screen: the
+        /// keys stay in the game while the mouse serves the map). Unlike HasControlFocus it allows the map mode, so
+        /// mouse look stays off there. Walking locks do not belong here: the caller stops door use while a request runs.
+        /// </summary>
+        public bool CanInteract => Placed && Application.isFocused && InputAllowed && (CursorLocked || mapMode);
+
+        /// <summary>E pressed in this frame (once per press, holding does not repeat) while CanInteract.</summary>
+        public bool InteractPressed => CanInteract && Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame;
 
         void Awake()
         {
@@ -228,23 +263,20 @@ namespace WordRoom.World
             var kb = Keyboard.current;
             var mouse = Mouse.current;
             var allowed = InputAllowed;
-            if (allowed && relockOnResume)
+            if (allowed && relockOnResume && !mapMode)                        // no relock under a menu block or an open map
             {
                 relockOnResume = false;
                 if (placed && Application.isFocused) SetCursorLock(true);
             }
             if (HandlesEscape && kb != null && kb.escapeKey.wasPressedThisFrame) SetCursorLock(false);
-            else if (allowed && placed && !CursorLocked && Application.isFocused && mouse != null && mouse.leftButton.wasPressedThisFrame) SetCursorLock(true);
+            else if (allowed && !mapMode && placed && !CursorLocked && Application.isFocused && mouse != null && mouse.leftButton.wasPressedThisFrame) SetCursorLock(true);
             if (!placed) return;
 
             var input = Vector2.zero;
-            if (allowed && CursorLocked && Application.isFocused)
-            {
-                if (mouse != null) Look(mouse.delta.ReadValue());
-                if (kb != null && !movementLocked)
-                    input = new Vector2((kb.dKey.isPressed ? 1f : 0f) - (kb.aKey.isPressed ? 1f : 0f),
-                                        (kb.wKey.isPressed ? 1f : 0f) - (kb.sKey.isPressed ? 1f : 0f));
-            }
+            if (allowed && CursorLocked && Application.isFocused && !mapMode && mouse != null) Look(mouse.delta.ReadValue());
+            if (WalkInputAllowed && kb != null)
+                input = new Vector2((kb.dKey.isPressed ? 1f : 0f) - (kb.aKey.isPressed ? 1f : 0f),
+                                    (kb.wKey.isPressed ? 1f : 0f) - (kb.sKey.isPressed ? 1f : 0f));
             input = Vector2.ClampMagnitude(input, 1f);  // diagonal no faster than straight
             var move = (transform.right * input.x + transform.forward * input.y) * moveSpeed;
 

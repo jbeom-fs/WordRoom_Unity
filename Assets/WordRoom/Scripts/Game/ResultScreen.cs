@@ -32,6 +32,8 @@ namespace WordRoom.Game
         [SerializeField] RoomGenerationDebug game;
         [Tooltip("결과 화면 동안 닫고 끌 게임 메뉴. 비우면 같은 오브젝트의 것을 씁니다(없으면 끄지 않음).")]
         [SerializeField] PauseMenu pauseMenu;
+        [Tooltip("결과 화면 동안 닫고 끌 지도. 비우면 같은 오브젝트의 것을 씁니다(없으면 끄지 않음).")]
+        [SerializeField] MapScreen map;
         [Tooltip("메인 메뉴 씬 이름(빌드 씬 목록에 있어야 함)")]
         [SerializeField] string mainMenuScene = GameLaunch.MainMenuScene;
 
@@ -55,6 +57,7 @@ namespace WordRoom.Game
 
         // State before the result took over, given back by Hide.
         bool pauseWasEnabled;
+        bool mapWasEnabled;
         bool hintWasSuppressed;
 
         public bool IsShown => shown;
@@ -63,6 +66,7 @@ namespace WordRoom.Game
         {
             if (game == null) game = GetComponent<RoomGenerationDebug>();
             if (pauseMenu == null) pauseMenu = GetComponent<PauseMenu>();
+            if (map == null) map = GetComponent<MapScreen>();
             var missing = MissingReferences();
             ready = missing == null;
             if (!ready)
@@ -141,8 +145,10 @@ namespace WordRoom.Game
             }
             var displayWasActive = display.activeSelf;
             var pauseTaken = false;
+            var mapTaken = false;
             var inputTaken = false;
             pauseWasEnabled = pauseMenu != null && pauseMenu.enabled;
+            mapWasEnabled = map != null && map.enabled;
             hintWasSuppressed = game.SuppressGoalHint;
             try
             {
@@ -162,6 +168,12 @@ namespace WordRoom.Game
                     pauseMenu.Close();                                     // its unblock happens before ours
                     pauseMenu.enabled = false;                             // no Escape menu over the result
                 }
+                if (map != null)
+                {
+                    mapTaken = true;
+                    map.Close();                                           // its unblock also comes before ours
+                    map.enabled = false;                                   // Tab does not open it over the result
+                }
                 inputTaken = true;
                 Block(game.Player);
                 FirstPersonPlayer.ReleaseCursor();
@@ -175,6 +187,7 @@ namespace WordRoom.Game
                 shown = false;
                 if (inputTaken) Block(null);                               // only the block taken here
                 if (pauseTaken && pauseMenu != null) pauseMenu.enabled = pauseWasEnabled;
+                if (mapTaken && map != null) map.enabled = mapWasEnabled;
                 game.SuppressGoalHint = hintWasSuppressed;
                 if (display != null && !displayWasActive) display.SetActive(false);
                 ReportUnusable("표시 중 오류(Console 확인)");
@@ -197,6 +210,7 @@ namespace WordRoom.Game
             Block(null);
             if (game != null) game.SuppressGoalHint = hintWasSuppressed;
             if (pauseMenu != null) pauseMenu.enabled = pauseWasEnabled;
+            if (map != null) map.enabled = mapWasEnabled;
         }
 
         void Block(FirstPersonPlayer p)
