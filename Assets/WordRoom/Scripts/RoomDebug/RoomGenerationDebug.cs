@@ -106,6 +106,9 @@ namespace WordRoom.RoomDebug
         string hudCurrent;                   // HUD words from the last confirmed placement or entry snapshot; null = none
         string hudTarget;
         int shownRadius = -1;                // display radius of the last snapshot shown in this experiment; -1 = none yet
+        string haltHintFor, haltHintText;    // hint texts kept for the reason/status they were made from
+        string endHintFor, endHintText;
+        string unplacedHintText;
 
         /// <summary>The connected player when its component and object are active; null = arrow-key/camera debug.</summary>
         FirstPersonPlayer ActivePlayer => player != null && player.isActiveAndEnabled ? player : null;
@@ -122,7 +125,36 @@ namespace WordRoom.RoomDebug
 
         /// <summary>Stop reason and what to do, kept on screen until the next new experiment; null when not stopped.</summary>
         // The hint font (Pretendard-Black SDF, static atlas) has no '·', which the reasons may contain.
-        string HaltHint => halt != null ? $"진행 정지: {halt.Replace("·", ", ")}\n{haltAdvice}" : null;
+        // Built once per stop reason, not every frame.
+        string HaltHint
+        {
+            get
+            {
+                if (halt == null) return null;
+                if (!ReferenceEquals(halt, haltHintFor))
+                {
+                    haltHintFor = halt;
+                    haltHintText = $"진행 정지: {halt.Replace("·", ", ")}\n{haltAdvice}";
+                }
+                return haltHintText;
+            }
+        }
+
+        /// <summary>Hint of a finished experiment, built once per status (not every frame).</summary>
+        string EndHint
+        {
+            get
+            {
+                if (!ReferenceEquals(status, endHintFor))
+                {
+                    endHintFor = status;
+                    endHintText = status == "success" ? "목표 도달" : $"실험 종료: {StatusText.Korean(status)}";
+                }
+                return endHintText;
+            }
+        }
+
+        string UnplacedHint => unplacedHintText ??= $"플레이어가 배치되지 않았습니다\n{haltAdvice}";
 
         void Awake()
         {
@@ -144,7 +176,7 @@ namespace WordRoom.RoomDebug
             if (service != null) service.StateChanged -= OnDataState;
             cts?.Cancel();          // results of running work are discarded (see the token checks after await)
             ReleaseControlled();    // nobody checks room entries now; enabling again does not resume this player
-            SetHint(null);
+            if (hint != null) hint.Clear();
             if (hud != null) hud.Clear();   // words already dropped with the player; enabling again shows nothing old
         }
 
@@ -510,12 +542,12 @@ namespace WordRoom.RoomDebug
             }
             if (controlled == null)
             {
-                SetHint(generator != null ? $"플레이어가 배치되지 않았습니다\n{haltAdvice}" : null);
+                SetHint(generator != null ? UnplacedHint : null);
                 return;
             }
             if (status != "running")
             {
-                SetHint(status == "success" ? "목표 도달" : $"실험 종료: {StatusText.Korean(status)}");
+                SetHint(EndHint);
                 return;
             }
             string text = null;
@@ -683,6 +715,7 @@ namespace WordRoom.RoomDebug
         {
             hudCurrent = current;
             hudTarget = target;
+            if (current == null && hud != null) hud.Clear();   // words dropped: nothing old can come back
             RefreshHud();
         }
 
@@ -690,7 +723,9 @@ namespace WordRoom.RoomDebug
         /// The HUD is visible only while a first-person player is placed for this experiment and play is not stopped
         /// (also while a door opens or a request runs, and after the goal or another end). It shows the words of the
         /// last confirmed placement or entry; a door opening never changes them. Arrow-key/Console debug, a
-        /// released player, a stop or a new experiment hide it. Cheap per frame: the HUD only compares strings.
+        /// released player, a stop or a new experiment hide it (dropped words also Clear it). Cheap per frame: the
+        /// HUD only compares strings. A disabled HUD ignores Show and stays hidden; after it is enabled again the next
+        /// frame's Show writes the words anew.
         /// </summary>
         void RefreshHud()
         {
@@ -703,7 +738,7 @@ namespace WordRoom.RoomDebug
             else if (visible && !hudMissingLogged)
             {
                 hudMissingLogged = true;
-                Debug.LogWarning("[HUD] WordRoomHud가 없어 현재·목표 단어를 화면에 표시하지 않습니다(플레이는 계속). RoomGenerationDebug 오브젝트에 WordRoomHud를 추가하세요.");
+                Debug.LogWarning("[HUD] WordRoomHud가 없어 현재·목표 단어를 화면에 표시하지 않습니다(플레이는 계속). RoomGenerationDebug 오브젝트에 WordRoomHud를 두고 WordRoom/메인 메뉴와 게임 설정 구성 메뉴로 HudCanvas를 연결하세요.");
             }
         }
 
@@ -713,7 +748,7 @@ namespace WordRoom.RoomDebug
             else if (!string.IsNullOrEmpty(text) && !hintMissingLogged)
             {
                 hintMissingLogged = true;
-                Debug.LogWarning("[안내] PlayHint가 없어 화면 안내를 표시하지 않습니다(플레이는 계속). RoomGenerationDebug 오브젝트에 PlayHint를 추가하세요.");
+                Debug.LogWarning("[안내] PlayHint가 없어 화면 안내를 표시하지 않습니다(플레이는 계속). RoomGenerationDebug 오브젝트에 PlayHint를 두고 WordRoom/메인 메뉴와 게임 설정 구성 메뉴로 PlayHintCanvas를 연결하세요.");
             }
         }
 

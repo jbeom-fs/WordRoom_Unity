@@ -1,75 +1,81 @@
 using TMPro;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace WordRoom.World
 {
     /// <summary>
-    /// One line of play guidance on the screen (e.g. "[E] 문 열기"): a screen-space overlay canvas with one
-    /// TextMeshPro text, made at runtime under this object the first time something is shown. Set replaces the
-    /// text and an empty or null text hides it; setting the same text again changes nothing (no per-frame
-    /// rebuild). Uses the given font (the project's Korean TMP font); without it TMP's default font is used and
-    /// Korean may not render. Main thread only.
+    /// One line of play guidance on the screen (e.g. "[E] 문 열기"). The display is a canvas saved in the scene
+    /// (prefab Assets/Prefabs/UI/PlayHintCanvas: sort order 100, centered text, no raycast targets, 1920×1080
+    /// reference with UiScaleBinding); this component only controls it and is kept apart from it, so hiding the
+    /// display never disables the control. Set writes the text only when it changed and turns the canvas on; an
+    /// empty or null text hides it. Hide only turns the canvas off (the same text set again shows it again);
+    /// Clear empties the text and hides; nothing is ever created or destroyed. While this component is disabled
+    /// the hint stays hidden whoever calls Set, and disabling clears it. Missing references are reported once and
+    /// the hint then stays off. Main thread only.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class PlayHint : MonoBehaviour
     {
-        [Tooltip("안내 문구 폰트(한글 TMP 폰트, 예: Assets/Font/Pretendard-Black SDF). 비우면 TMP 기본 폰트라 한글이 보이지 않을 수 있습니다.")]
-        [SerializeField] TMP_FontAsset font;
-        [Tooltip("글자 크기(1920×1080 기준 픽셀, UI 크기 설정을 따름)")]
-        [SerializeField] float fontSize = 30f;
-        [Tooltip("화면 중앙 기준 위치(1920×1080 기준 픽셀). 기본은 중앙 조금 아래")]
-        [SerializeField] Vector2 offset = new Vector2(0f, -90f);
+        [Tooltip("안내 표시 영역(씬에 배치된 PlayHintCanvas의 Canvas). 숨길 때 이 Canvas만 끄고 이 컴포넌트는 켜 둡니다.")]
+        [SerializeField] Canvas canvas;
+        [Tooltip("안내 문구 텍스트(글꼴·크기·위치·외곽선은 프리팹에서 조정)")]
+        [SerializeField] TextMeshProUGUI label;
 
-        GameObject canvasObject;
-        TextMeshProUGUI label;
-        string current = "";
+#pragma warning disable CS0414, CS0649   // read and written only by the Editor setup (SerializedObject), never at runtime
+        // Values saved by the former runtime-built hint (fields "font", "fontSize", "offset"), moved once onto this
+        // scene's hint canvas instance. -1 / NaN = no saved value could be read.
+        [SerializeField, HideInInspector, FormerlySerializedAs("font")] TMP_FontAsset legacyFont = null;
+        [SerializeField, HideInInspector, FormerlySerializedAs("fontSize")] float legacyFontSize = -1f;
+        [SerializeField, HideInInspector, FormerlySerializedAs("offset")] Vector2 legacyOffset = new Vector2(float.NaN, float.NaN);
+        [SerializeField, HideInInspector] bool legacyUiMigrated;
+#pragma warning restore CS0414, CS0649
+
+        string current = "";                // text on the label
+        bool initialized, ready;
+
+        void Awake()
+        {
+            if (Initialize()) Hide();       // nothing is shown before the first Set
+        }
 
         public void Set(string text)
         {
-            text = text ?? "";
-            if (text == current) return;
-            current = text;
-            if (text.Length == 0)
+            if (!isActiveAndEnabled) return;                       // disabled: stays hidden
+            if (string.IsNullOrEmpty(text))
             {
-                if (canvasObject != null) canvasObject.SetActive(false);
+                Hide();
                 return;
             }
-            if (label == null) Build();
-            label.text = text;
-            canvasObject.SetActive(true);
+            if (!Initialize()) return;
+            if (text != current) label.text = current = text;
+            if (!canvas.enabled) canvas.enabled = true;
         }
 
-        void Build()
+        /// <summary>Turns only the display off.</summary>
+        public void Hide()
         {
-            if (canvasObject != null) Destroy(canvasObject);
-            canvasObject = new GameObject("PlayHint Canvas");
-            canvasObject.transform.SetParent(transform, false);
-            var canvas = canvasObject.AddComponent<Canvas>();
-            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            canvas.sortingOrder = 100;
-            UiScaleBinding.Configure(canvasObject);   // same 1920×1080 reference and UI size setting as the HUD and menus
-
-            var textObject = new GameObject("Text", typeof(RectTransform));
-            textObject.transform.SetParent(canvasObject.transform, false);
-            label = textObject.AddComponent<TextMeshProUGUI>();
-            if (font != null) label.font = font;
-            else Debug.LogWarning("[안내] PlayHint의 Font가 비어 있어 TMP 기본 폰트를 씁니다. 한글이 보이지 않으면 Pretendard-Black SDF를 지정하세요.", this);
-            label.fontSize = fontSize;
-            label.alignment = TextAlignmentOptions.Center;
-            label.color = Color.white;
-            label.outlineWidth = 0.2f;
-            label.outlineColor = new Color32(0, 0, 0, 255);
-            label.raycastTarget = false;
-            var rect = label.rectTransform;
-            rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
-            rect.pivot = new Vector2(0.5f, 0.5f);
-            rect.sizeDelta = new Vector2(1200f, 200f);
-            rect.anchoredPosition = offset;
+            if (canvas != null && canvas.enabled) canvas.enabled = false;
         }
 
-        void OnDestroy()
+        /// <summary>Empties the text and its cache, then hides. The scene's UI stays.</summary>
+        public void Clear()
         {
-            if (canvasObject != null) Destroy(canvasObject);
+            if (ready && current.Length > 0) label.text = "";
+            current = "";
+            Hide();
+        }
+
+        void OnDisable() => Clear();
+
+        bool Initialize()
+        {
+            if (initialized) return ready;
+            initialized = true;
+            if (canvas != null && label != null) return ready = true;
+            Debug.LogError($"[안내] PlayHint의 표시 참조가 비어 있어 화면 안내를 표시하지 않습니다(플레이는 계속): " +
+                           $"{(canvas == null ? "canvas " : "")}{(label == null ? "label" : "")}. WordRoom/메인 메뉴와 게임 설정 구성 메뉴로 PlayHintCanvas를 배치·연결하세요.", this);
+            return ready = false;
         }
     }
 }

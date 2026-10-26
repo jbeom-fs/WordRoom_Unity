@@ -1,21 +1,21 @@
 # WordRoom — Known Issues
 
-기록·갱신일: **2026-10-23 (한국 시간)**  
+기록·갱신일: **2026-10-26 (한국 시간)** — KI-004·008 작업 트리 수정 반영  
 현재 확인 기준: **`79a6ba2` — feat(game): 메인 메뉴·난이도·사용자 설정 추가**  
 KI-001 최초 기준: **`60d4d3d`**
 
-미해결 사항을 정리한다. **KI-001만 사용자가 기록 유지·수정 보류를 결정했다.** KI-002~005는 최신 메뉴 검토, KI-006~008은 이전 모델 도구·HUD 검토 사항이다. 모두 미수정·수정 범위 미합의 상태다. 문서 기록을 수정 승인이나 보류 결정으로 해석하지 않는다. 코드 읽기로 확인한 경로와 실제 사용자 검증 결과를 구분한다. 번호는 문서 관리용이며 발견 순서를 뜻하지 않는다.
+미해결 사항을 정리한다. **KI-001만 사용자가 기록 유지·수정 보류를 결정했다.** KI-002~005는 최신 메뉴 검토, KI-006~008은 이전 모델 도구·HUD 검토 사항이다. **KI-004·008은 10월 26일 고정 UI 사전 배치 전환 요청 범위에 포함되어 작업 트리에서 코드를 수정했다(미커밋, 실행 확인 전).** 나머지(KI-002·003·005·006·007)는 미수정·수정 범위 미합의 상태다. 문서 기록을 수정 승인이나 보류 결정으로 해석하지 않는다. 코드 읽기로 확인한 경로와 실제 사용자 검증 결과를 구분한다. 번호는 문서 관리용이며 발견 순서를 뜻하지 않는다.
 
 | 번호 | 항목 | 우선순위·상태 |
 |---|---|---|
 | KI-001 | Prepare·Enter 일부 취소 확인 누락 | 낮음 / 사용자 결정으로 수정 보류 |
 | KI-002 | 첫 미확정 화면 변경 후 재실행 복구 기준 없음 | P2 / 코드 검토 위험, 미수정·수정 범위 미합의 |
 | KI-003 | 표시 거리 갱신 중 걷기와 입장 판정 정지의 불일치 | P3 / 조건부 위험, 미수정·수정 범위 미합의 |
-| KI-004 | UI 크기 트랙 최초 누름에서 즉시 적용 | P3 / 입력 처리 순서 문제, 미수정·수정 범위 미합의 |
+| KI-004 | UI 크기 트랙 최초 누름에서 즉시 적용 | P3 / 10-26 코드 수정(미커밋)·사용자 확인 대기 |
 | KI-005 | 현재 해상도 추가로 창 크기 제한 우회 | P3 / 목록·검증 경로 문제, 미수정·수정 범위 미합의 |
 | KI-006 | 모델 교체 도구 부분 저장과 실패 안내 불일치 | P2 / Editor 도구 오류 경로, 미수정 |
 | KI-007 | 모델 교체 도구 재실행 시 재질·조명 조정 덮어쓰기 | P3 / 사용자 설정 보존, 미수정 |
-| KI-008 | HUD 컴포넌트 비활성화 후 UI 재생성 가능 | P3 / 비활성 처리, 미수정 |
+| KI-008 | HUD 컴포넌트 비활성화 후 UI 재생성 가능 | P3 / 10-26 코드 수정(미커밋)·사용자 확인 대기 |
 
 최신 항목들은 에이전트가 실행·자동 재현하지 않았다. 우선순위는 검토 당시 영향 판단이며 모든 사용자 환경에서 발생한다고 단정하지 않는다.
 
@@ -105,7 +105,7 @@ RefreshView는 busy를 켜고 작업 스레드에서 스냅샷을 캡처하지�
 
 ## KI-004. UI 크기 슬라이더의 최초 트랙 누름은 즉시 적용될 수 있음
 
-**우선순위 P3 / 미수정 / 수정 범위 미합의 / 코드·설치된 UGUI 소스 읽기.**
+**우선순위 P3 / 작업 트리에서 코드 수정 / 미커밋 / 사용자 실행 확인 전.** 아래 원인 설명은 **수정 전(`79a6ba2`) 상태**이며 기록으로 보존한다. 근거: 코드·설치된 UGUI 소스 읽기.
 
 SettingsPanel은 Slider를 만든 다음 SliderRelease를 추가한다. 핸들 바깥 트랙을 누르면 Slider.OnPointerDown이 먼저 UpdateDrag로 값을 변경할 수 있다. onValueChanged에서 Held를 확인할 때 SliderRelease.OnPointerDown이 아직 실행되지 않았다면 false여서 UI 크기를 즉시 바꾼다.
 
@@ -116,6 +116,13 @@ SettingsPanel은 Slider를 만든 다음 SliderRelease를 추가한다. 핸들 �
 - [SliderRelease.cs](../Assets/WordRoom/Scripts/Game/SliderRelease.cs): OnPointerDown·OnPointerUp.
 - 설치된 UGUI의 Slider.OnPointerDown과 ExecuteEvents 처리 순서를 읽었다. 패키지는 수정하지 않았다.
 - 보완 후보: Slider의 값 변경 전에 누름 상태를 확정하도록 포인터 처리를 통합한다. 키보드 조절 즉시 적용은 유지한다.
+
+### 10월 26일 변경 (작업 트리, 미커밋 / 사용자 실행 확인 전)
+
+- **방식**: 처리 순서에 의존하지 않도록 판단 시점을 옮겼다. onValueChanged는 값 표시만 즉시 갱신하고 `uiScaleDirty`만 표시한다. 실제 적용은 SettingsPanel.LateUpdate(모든 Update·EventSystem 처리 후)에서 `Held`가 false일 때만 한다. 트랙 최초 누름은 같은 프레임 안에서 SliderRelease.OnPointerDown까지 끝나므로 LateUpdate 시점에는 Held가 true이고, 놓을 때 Released로 적용한다.
+- **근거**: ExecuteEvents는 같은 오브젝트의 핸들러를 컴포넌트 순서대로 호출하므로, 컴포넌트 순서를 맞추는 방식은 사용자가 Inspector에서 순서를 바꾸면 다시 깨진다. Slider 하위 클래스로 바꾸는 방식은 SliderRelease 컴포넌트·프리팹 구조를 바꾸는 범위가 커서 택하지 않았다.
+- **유지**: 키보드 조절은 같은 프레임 LateUpdate에서 적용(즉시 적용 의도 유지). 끌기 중 다른 설정 변경으로 RefreshAll이 슬라이더를 저장값으로 되돌리지 않는다. 패널이 닫히는 프레임의 미적용 키보드 값은 OnDisable에서 적용한다.
+- **확인 대기**: 트랙 바깥 클릭·핸들 끌기·키보드 좌우 조절에서 적용 시점. 실행·재현하지 않았다.
 
 ## KI-005. 현재 해상도 재삽입으로 창 모드 목록 제한이 우회될 수 있음
 
@@ -152,7 +159,7 @@ EnsureMaterials는 이미 있는 재질도 기본 색·금속성·매끄러움·
 
 ## KI-008. HUD 컴포넌트 비활성화만으로 화면이 계속 숨겨지지 않을 수 있음
 
-**우선순위 P3 / 미수정 / 수정 범위 미합의 / 컴포넌트 비활성화 조건.**
+**우선순위 P3 / 작업 트리에서 코드 수정 / 미커밋 / 사용자 실행 확인 전.** 아래 원인 설명은 **수정 전(`79a6ba2`) 상태**이며 기록으로 보존한다. 조건: 컴포넌트 비활성화.
 
 WordRoomHud.OnDisable은 Clear로 UI를 제거한다. 하지만 RoomGenerationDebug.RefreshHud는 참조가 null이 아니면 활성 여부와 관계없이 매 프레임 Show를 호출한다. Show에도 활성 여부 검사가 없어 UI를 다시 만들 수 있다. 비활성 MonoBehaviour의 일반 메서드는 외부에서 호출할 수 있다.
 
@@ -161,3 +168,14 @@ WordRoomHud.OnDisable은 Clear로 UI를 제거한다. 하지만 RoomGenerationDe
 - [WordRoomHud.cs](../Assets/WordRoom/Scripts/World/WordRoomHud.cs): Show·Clear·OnDisable.
 - [RoomGenerationDebug.cs](../Assets/WordRoom/Scripts/RoomDebug/RoomGenerationDebug.cs): RefreshHud.
 - 보완 후보: 호출 측이나 Show에서 활성 여부를 확인하고, 재활성화 후 표시 정책을 일관되게 정한다.
+
+### 10월 26일 변경 (작업 트리, 미커밋 / 사용자 실행 확인 전)
+
+고정 UI 사전 배치 전환과 같은 수명 관리 문제라 함께 처리했다.
+
+- **구조**: HUD UI는 씬에 미리 배치한 `HudCanvas` 프리팹 인스턴스다. WordRoomHud는 RoomGenerationDebug 오브젝트에 남아 그 Canvas·텍스트를 참조만 한다. 표시 영역(Canvas 컴포넌트)과 제어 컴포넌트가 분리되어, 숨김이 제어 컴포넌트를 끄지 않는다. 런타임 생성·Destroy 경로는 없다.
+- **Show**: 컴포넌트가 `isActiveAndEnabled`가 아니면 호출을 무시해 화면이 다시 켜지지 않는다. 바뀐 단어만 다시 쓴다.
+- **Hide / Clear / OnDisable**: Hide는 Canvas만 끈다. Clear는 단어·캐시를 비우고 숨긴다(삭제 없음). OnDisable은 Clear를 호출한다.
+- **재활성화**: OnDisable에서 캐시를 비우므로 다시 켠 뒤 같은 단어로 Show가 와도 표시 갱신이 생략되지 않는다. 호출 측 RefreshHud는 매 프레임 상태대로 Show/Hide를 호출하므로 다시 켜면 다음 프레임에 현재 단어가 다시 보인다.
+- **호출 측**: 단어를 버릴 때(새 실험·플레이어 해제)는 Clear, Halt·디버그 모드는 Hide. 현재 단어는 기존대로 실제 입장 표시·바닥 확인 후에만 바뀐다. PlayHint도 같은 정책(비활성 시 Set 무시, Hide는 Canvas만, Clear·OnDisable은 문구 비우기)으로 맞췄다.
+- **확인 대기**: 실행 중 WordRoomHud·PlayHint 체크 해제·재설정, RoomGenerationDebug 오브젝트 비활성화·재활성화. 실행·재현하지 않았다.

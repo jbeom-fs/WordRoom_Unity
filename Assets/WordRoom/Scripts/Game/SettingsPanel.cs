@@ -2,36 +2,93 @@ using System;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.UI;
 using WordRoom.Settings;
 
 namespace WordRoom.Game
 {
     /// <summary>
-    /// The settings screen shared by the main menu and the game menu. Rows scroll inside the panel; the title and
-    /// the footer (기본값 복원, 닫기) stay fixed, so closing is always reachable at any window or UI size.
-    /// Changes apply and are stored at once (UI size on slider release when dragged), except the screen mode and
-    /// size: those apply with 화면 적용 and must be kept within 15 seconds (unscaled real time), otherwise — or on
+    /// The settings screen shared by the main menu and the game menu: a prefab (Assets/Prefabs/UI/SettingsPanel)
+    /// placed, hidden, in each menu; it is never made at runtime. Rows scroll inside the panel; the title and the
+    /// footer (기본값 복원, 닫기) stay fixed, so closing is always reachable at any window or UI size.
+    /// Changes apply and are stored at once, except two: the UI size dragged with the pointer applies when it is
+    /// let go (keyboard steps apply in the same frame, from LateUpdate, so a first press on the track — which
+    /// changes the value before SliderRelease sees the press — never applies early), and the screen mode and size:
+    /// those apply with 화면 적용 and must be kept within 15 seconds (unscaled real time), otherwise — or on
     /// 되돌리기, closing the panel or leaving the scene — the previous screen comes back. Only a kept screen setup
     /// is stored. 기본값 복원 resets every preference (never other PlayerPrefs, never the game session) and runs the
-    /// default screen through the same confirmation. The controls always show the stored values when opened.
+    /// default screen through the same confirmation. The controls show the stored values whenever it is open;
+    /// texts are rewritten only when the shown value changes.
+    /// References and listeners are checked and added once (Initialize, from Awake or from the first Open, so a
+    /// panel that starts inactive opens correctly); missing references are reported once and the panel then never
+    /// opens. Only the listeners added here are removed again.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class SettingsPanel : MonoBehaviour
     {
+        /// <summary>"&lt;" button, value text, "&gt;" button.</summary>
+        [Serializable]
+        public struct Stepper
+        {
+            public Button previous;
+            public Button next;
+            public TextMeshProUGUI value;
+        }
+
+        [Serializable]
+        public struct SliderField
+        {
+            public Slider slider;
+            public TextMeshProUGUI value;
+        }
+
         const float ConfirmSeconds = 15f;
-        const float LabelWidth = 250f;
-        const float ValueWidth = 130f;
-        const float RowHeight = 52f;
+
+        [Header("게임·조작")]
+        [SerializeField] Stepper displayRadius;
+        [SerializeField] SliderField mouseSensitivity;
+        [SerializeField] Stepper invertMouseY;
+
+        [Header("화면")]
+        [SerializeField] SliderField fieldOfView;
+        [SerializeField] SliderField uiScale;
+        [Tooltip("UI 크기 슬라이더의 포인터 누름·놓기 감지(같은 오브젝트)")]
+        [SerializeField] SliderRelease uiScaleRelease;
+        [SerializeField] Stepper screenMode;
+        [SerializeField] Stepper resolution;
+        [SerializeField] Button applyButton;
+        [Tooltip("화면 적용 후 유지·되돌리기 확인 줄. 확인 대기 중에만 켜짐")]
+        [SerializeField] GameObject confirmRow;
+        [SerializeField] TextMeshProUGUI confirmText;
+        [SerializeField] Button keepButton;
+        [SerializeField] Button revertButton;
+
+        [Header("소리")]
+        [SerializeField] SliderField masterVolume;
+        [SerializeField] SliderField sfxVolume;
+        [Tooltip("효과음 슬라이더를 놓을 때 클릭음으로 새 음량을 들려줌(같은 오브젝트)")]
+        [SerializeField] SliderRelease sfxRelease;
+
+        [Header("하단")]
+        [SerializeField] Button resetButton;
+        [SerializeField] Button closeButton;
+        [Tooltip("열 때 키보드 선택을 받을 컨트롤. 비우면 방 표시 거리의 < 버튼")]
+        [SerializeField] Selectable firstSelected;
 
         public event Action Closed;
 
-        TextMeshProUGUI radiusValue, invertValue, modeValue, sizeValue, confirmText;
-        Slider sensitivity, fieldOfView, uiScale, masterVolume, sfxVolume;
-        TextMeshProUGUI sensitivityValue, fieldOfViewValue, uiScaleValue, masterValue, sfxValue;
-        SliderRelease uiScaleRelease;
-        GameObject confirmRow, first;
-        Button applyButton, keepButton;
+        readonly List<ButtonBinding> bindings = new List<ButtonBinding>();
+        UnityAction<float> onSensitivity, onFieldOfView, onUiScale, onMaster, onSfx;
+        Action refreshAll, applyUiScale, playClick;
+        bool initialized, ready;
+
+        bool uiScaleDirty;                   // the UI size slider moved and the value is not applied yet
+
+        // Values the texts show now (rewritten only on change).
+        int shownRadius = -1, shownInvert = -1, shownUiScale = -1, shownMaster = -1, shownSfx = -1, shownMode = -1;
+        float shownSensitivity = float.NaN, shownFieldOfView = float.NaN;
+        Vector2Int shownSize = new Vector2Int(-1, -1);
 
         bool selectedFull;
         List<Vector2Int> sizes = new List<Vector2Int>();
@@ -43,27 +100,21 @@ namespace WordRoom.Game
 
         public bool IsOpen => gameObject.activeSelf;
 
-        /// <summary>Builds the (hidden) panel on `canvas`: centered, 960 wide, as tall as the canvas allows.</summary>
-        public static SettingsPanel Create(Transform canvas)
-        {
-            var r = ArchiveUi.Panel(canvas, "Settings");
-            r.anchorMin = new Vector2(0.5f, 0f);
-            r.anchorMax = new Vector2(0.5f, 1f);
-            r.pivot = new Vector2(0.5f, 0.5f);
-            r.sizeDelta = new Vector2(960f, -96f);                // 48 px from the top and bottom edges
-            r.anchoredPosition = Vector2.zero;
-            var panel = r.gameObject.AddComponent<SettingsPanel>();
-            panel.Build(r);
-            r.gameObject.SetActive(false);
-            return panel;
-        }
+        void Awake() => Initialize();
 
-        public void Open()
+        /// <summary>
+        /// Shows the panel with the stored values and selects its first control. False (nothing shown) when its
+        /// references are incomplete — the caller keeps its own screen then.
+        /// </summary>
+        public bool Open()
         {
-            gameObject.SetActive(true);
+            if (!Initialize()) return false;
             SelectCurrentScreen();
-            RefreshAll();
-            ArchiveUi.Select(first);
+            if (confirmRow.activeSelf != pending) confirmRow.SetActive(pending);   // left as it was when disabled mid-trial
+            if (IsOpen) RefreshAll();
+            else gameObject.SetActive(true);                        // OnEnable shows the stored values
+            ArchiveUi.Select(firstSelected != null ? firstSelected.gameObject : displayRadius.previous.gameObject);
+            return true;
         }
 
         /// <summary>Closes (an unconfirmed screen change goes back first) and writes the preferences.</summary>
@@ -76,14 +127,115 @@ namespace WordRoom.Game
             Closed?.Invoke();
         }
 
-        void OnDisable()
+        /// <summary>Once: checks every reference, then adds this panel's listeners. Later calls return the result.</summary>
+        bool Initialize()
         {
-            if (pending) RevertScreen();                            // scene change or menu closed around us
+            if (initialized) return ready;
+            initialized = true;
+            string missing = null;
+            Need(displayRadius, "displayRadius", ref missing);
+            Need(mouseSensitivity, "mouseSensitivity", ref missing);
+            Need(invertMouseY, "invertMouseY", ref missing);
+            Need(fieldOfView, "fieldOfView", ref missing);
+            Need(uiScale, "uiScale", ref missing);
+            ArchiveUi.Need(uiScaleRelease, "uiScaleRelease", ref missing);
+            Need(screenMode, "screenMode", ref missing);
+            Need(resolution, "resolution", ref missing);
+            ArchiveUi.Need(applyButton, "applyButton", ref missing);
+            ArchiveUi.Need(confirmRow, "confirmRow", ref missing);
+            ArchiveUi.Need(confirmText, "confirmText", ref missing);
+            ArchiveUi.Need(keepButton, "keepButton", ref missing);
+            ArchiveUi.Need(revertButton, "revertButton", ref missing);
+            Need(masterVolume, "masterVolume", ref missing);
+            Need(sfxVolume, "sfxVolume", ref missing);
+            ArchiveUi.Need(sfxRelease, "sfxRelease", ref missing);
+            ArchiveUi.Need(resetButton, "resetButton", ref missing);
+            ArchiveUi.Need(closeButton, "closeButton", ref missing);
+            if (missing != null)
+            {
+                Debug.LogError($"[설정] '{name}'의 참조가 비어 있어 설정 화면을 열지 않습니다: {missing}. WordRoom/메인 메뉴와 게임 설정 구성 메뉴나 Inspector에서 SettingsPanel 프리팹의 참조를 확인하세요.", this);
+                return ready = false;
+            }
+
+            ArchiveUi.Bind(bindings, displayRadius.previous, () => GameSettings.DisplayRadius--);
+            ArchiveUi.Bind(bindings, displayRadius.next, () => GameSettings.DisplayRadius++);
+            ArchiveUi.Bind(bindings, invertMouseY.previous, ToggleInvert);
+            ArchiveUi.Bind(bindings, invertMouseY.next, ToggleInvert);
+            ArchiveUi.Bind(bindings, screenMode.previous, ToggleMode);
+            ArchiveUi.Bind(bindings, screenMode.next, ToggleMode);
+            ArchiveUi.Bind(bindings, resolution.previous, () => StepSize(1));
+            ArchiveUi.Bind(bindings, resolution.next, () => StepSize(-1));
+            ArchiveUi.Bind(bindings, applyButton, ApplyScreen);
+            ArchiveUi.Bind(bindings, keepButton, KeepScreen);
+            ArchiveUi.Bind(bindings, revertButton, RevertScreen);
+            ArchiveUi.Bind(bindings, resetButton, ResetDefaults);
+            ArchiveUi.Bind(bindings, closeButton, Close);
+
+            mouseSensitivity.slider.onValueChanged.AddListener(onSensitivity = v => GameSettings.MouseSensitivity = Mathf.Round(v * 10f) / 10f);
+            fieldOfView.slider.onValueChanged.AddListener(onFieldOfView = v => GameSettings.FieldOfView = v);
+            uiScale.slider.onValueChanged.AddListener(onUiScale = OnUiScaleChanged);
+            masterVolume.slider.onValueChanged.AddListener(onMaster = v => GameSettings.MasterVolume = v / 100f);
+            sfxVolume.slider.onValueChanged.AddListener(onSfx = v => GameSettings.SfxVolume = v / 100f);
+            uiScaleRelease.Released += applyUiScale = ApplyUiScale;   // dragged: on release
+            sfxRelease.Released += playClick = UiSound.Click;          // hear the new level once
+            refreshAll = RefreshAll;
+            return ready = true;
         }
 
-        void Update()
+        static void Need(Stepper s, string field, ref string missing)
         {
-            if (!pending) return;
+            ArchiveUi.Need(s.previous, field + ".previous", ref missing);
+            ArchiveUi.Need(s.next, field + ".next", ref missing);
+            ArchiveUi.Need(s.value, field + ".value", ref missing);
+        }
+
+        static void Need(SliderField s, string field, ref string missing)
+        {
+            ArchiveUi.Need(s.slider, field + ".slider", ref missing);
+            ArchiveUi.Need(s.value, field + ".value", ref missing);
+        }
+
+        void OnDestroy()
+        {
+            if (!ready) return;
+            ArchiveUi.Unbind(bindings);
+            Remove(mouseSensitivity.slider, onSensitivity);
+            Remove(fieldOfView.slider, onFieldOfView);
+            Remove(uiScale.slider, onUiScale);
+            Remove(masterVolume.slider, onMaster);
+            Remove(sfxVolume.slider, onSfx);
+            if (uiScaleRelease != null) uiScaleRelease.Released -= applyUiScale;
+            if (sfxRelease != null) sfxRelease.Released -= playClick;
+        }
+
+        static void Remove(Slider s, UnityAction<float> listener)
+        {
+            if (s != null) s.onValueChanged.RemoveListener(listener);
+        }
+
+        void OnEnable()
+        {
+            if (!Initialize()) return;
+            GameSettings.Changed += refreshAll;
+            RefreshAll();
+        }
+
+        void OnDisable()
+        {
+            if (!ready) return;
+            GameSettings.Changed -= refreshAll;
+            if (uiScaleDirty && !uiScaleRelease.Held) ApplyUiScale();   // a keyboard step in the closing frame
+            if (pending) Revert(false);                             // scene change or menu closed around us
+        }
+
+        void LateUpdate()
+        {
+            if (uiScaleDirty && !uiScaleRelease.Held) ApplyUiScale();   // after the EventSystem: a press has set Held by now
+            if (pending) UpdateConfirm();
+        }
+
+        void UpdateConfirm()
+        {
             var left = deadline - Time.unscaledTime;
             if (left <= 0f)
             {
@@ -97,138 +249,75 @@ namespace WordRoom.Game
             confirmText.text = $"{now.Width} x {now.Height} {(now.FullScreen ? "전체 화면" : "창 모드")}을 유지할까요? {seconds}초 후 이전 화면으로 돌아갑니다";
         }
 
-        // ---- build ------------------------------------------------------------------------------------------
-        void Build(RectTransform r)
-        {
-            var layout = ArchiveUi.Vertical(r, 18f, 36, TextAnchor.UpperCenter);
-            layout.childForceExpandWidth = true;
-            var title = ArchiveUi.AddText(r, "설정", 40f, ArchiveUi.Ivory, TextAlignmentOptions.Left);
-            ArchiveUi.Size(title.gameObject, -1f, 56f);
-
-            var scroll = ArchiveUi.AddScroll(r, out var content);
-            ArchiveUi.Size(scroll.gameObject, -1f, 200f, -1f, 1f);   // takes the remaining height
-
-            Section(content, "게임");
-            radiusValue = Stepper(content, "방 표시 거리", () => GameSettings.DisplayRadius--, () => GameSettings.DisplayRadius++, out var radiusPrev);
-            first = radiusPrev.gameObject;
-
-            Section(content, "조작");
-            sensitivity = SliderRow(content, "마우스 감도", GameSettings.MinMouseSensitivity, GameSettings.MaxMouseSensitivity, false, out sensitivityValue);
-            sensitivity.onValueChanged.AddListener(v => GameSettings.MouseSensitivity = Mathf.Round(v * 10f) / 10f);
-            invertValue = Stepper(content, "마우스 Y축 반전", ToggleInvert, ToggleInvert, out _);
-
-            Section(content, "화면");
-            fieldOfView = SliderRow(content, "시야각", GameSettings.MinFieldOfView, GameSettings.MaxFieldOfView, true, out fieldOfViewValue);
-            fieldOfView.onValueChanged.AddListener(v => GameSettings.FieldOfView = v);
-            uiScale = SliderRow(content, "UI 크기", GameSettings.MinUiScale * 100f, GameSettings.MaxUiScale * 100f, true, out uiScaleValue);
-            uiScaleRelease = uiScale.gameObject.AddComponent<SliderRelease>();
-            uiScale.onValueChanged.AddListener(v =>
-            {
-                uiScaleValue.text = $"{v:0}%";
-                if (!uiScaleRelease.Held) GameSettings.UiScale = v / 100f;           // keyboard: at once
-            });
-            uiScaleRelease.Released += () => GameSettings.UiScale = uiScale.value / 100f;   // dragged: on release
-            modeValue = Stepper(content, "화면 모드", ToggleMode, ToggleMode, out _);
-            sizeValue = Stepper(content, "해상도", () => StepSize(1), () => StepSize(-1), out _);
-
-            var applyRow = Row(content);
-            Spacer(applyRow, LabelWidth);
-            applyButton = ArchiveUi.AddButton(applyRow, "화면 적용", ApplyScreen, 200f, 48f, 22f);
-            var note = ArchiveUi.AddText(applyRow, "적용 후 15초 안에 유지를 선택하세요", 18f, ArchiveUi.IvoryDim, TextAlignmentOptions.Left);
-            ArchiveUi.Size(note.gameObject, -1f, 48f, 1f);
-
-            confirmRow = Row(content, 96f).gameObject;
-            confirmText = ArchiveUi.AddText(confirmRow.transform, "", 20f, ArchiveUi.Ivory, TextAlignmentOptions.Left);
-            ArchiveUi.Size(confirmText.gameObject, -1f, 96f, 1f);
-            keepButton = ArchiveUi.AddButton(confirmRow.transform, "유지", KeepScreen, 120f, 48f, 22f);
-            ArchiveUi.AddButton(confirmRow.transform, "되돌리기", RevertScreen, 150f, 48f, 22f);
-            confirmRow.SetActive(false);
-
-            Section(content, "소리");
-            masterVolume = SliderRow(content, "전체 음량", 0f, 100f, true, out masterValue);
-            masterVolume.onValueChanged.AddListener(v => GameSettings.MasterVolume = v / 100f);
-            sfxVolume = SliderRow(content, "효과음 음량", 0f, 100f, true, out sfxValue);
-            sfxVolume.onValueChanged.AddListener(v => GameSettings.SfxVolume = v / 100f);
-            sfxVolume.gameObject.AddComponent<SliderRelease>().Released += UiSound.Click;   // hear the new level once
-
-            var footer = ArchiveUi.NewRect("Footer", r);
-            ArchiveUi.Horizontal(footer, 16f, TextAnchor.MiddleRight);
-            ArchiveUi.Size(footer.gameObject, -1f, 60f);
-            ArchiveUi.AddButton(footer, "기본값 복원", ResetDefaults, 220f, 56f, 22f);
-            ArchiveUi.AddButton(footer, "닫기", Close, 180f, 56f, 22f);
-
-            GameSettings.Changed += RefreshAll;
-        }
-
-        void OnDestroy() => GameSettings.Changed -= RefreshAll;
-
-        static RectTransform Row(RectTransform content, float height = RowHeight)
-        {
-            var row = ArchiveUi.NewRect("Row", content);
-            ArchiveUi.Horizontal(row, 12f, TextAnchor.MiddleLeft);
-            ArchiveUi.Size(row.gameObject, -1f, height);
-            return row;
-        }
-
-        static void Spacer(RectTransform row, float width) => ArchiveUi.Size(ArchiveUi.NewRect("Spacer", row).gameObject, width, 1f);
-
-        static void Section(RectTransform content, string title)
-        {
-            var t = ArchiveUi.AddText(content, title, 24f, ArchiveUi.Brass, TextAlignmentOptions.BottomLeft);
-            ArchiveUi.Size(t.gameObject, -1f, 44f);
-        }
-
-        static TextMeshProUGUI Label(RectTransform row, string text)
-        {
-            var t = ArchiveUi.AddText(row, text, 22f, ArchiveUi.IvoryDim, TextAlignmentOptions.Left);
-            ArchiveUi.Size(t.gameObject, LabelWidth, RowHeight);
-            return t;
-        }
-
-        /// <summary>Label, "&lt;" button, value, "&gt;" button. Returns the value text.</summary>
-        static TextMeshProUGUI Stepper(RectTransform content, string label, Action previousOption, Action nextOption, out Button previousButton)
-        {
-            var row = Row(content);
-            Label(row, label);
-            previousButton = ArchiveUi.AddButton(row, "<", previousOption, 56f, 46f, 24f);
-            var value = ArchiveUi.AddText(row, "", 22f, ArchiveUi.Ivory, TextAlignmentOptions.Center);
-            ArchiveUi.Size(value.gameObject, 300f, RowHeight);
-            ArchiveUi.AddButton(row, ">", nextOption, 56f, 46f, 24f);
-            return value;
-        }
-
-        static Slider SliderRow(RectTransform content, string label, float min, float max, bool whole, out TextMeshProUGUI value)
-        {
-            var row = Row(content);
-            Label(row, label);
-            var slider = ArchiveUi.AddSlider(row, min, max, whole, 400f);
-            value = ArchiveUi.AddText(row, "", 22f, ArchiveUi.Ivory, TextAlignmentOptions.Right);
-            ArchiveUi.Size(value.gameObject, ValueWidth, RowHeight);
-            return slider;
-        }
-
         // ---- values -----------------------------------------------------------------------------------------
         /// <summary>Shows the stored preferences without triggering their change handlers.</summary>
         void RefreshAll()
         {
-            if (radiusValue == null) return;
+            if (!ready) return;
             var radius = GameSettings.DisplayRadius;
-            radiusValue.text = $"{radius}칸 (최대 {2 * radius * radius + 2 * radius + 1}개)";
-            sensitivity.SetValueWithoutNotify(GameSettings.MouseSensitivity);
-            sensitivityValue.text = $"{GameSettings.MouseSensitivity:0.0}배";
-            invertValue.text = GameSettings.InvertMouseY ? "켜짐" : "꺼짐";
-            fieldOfView.SetValueWithoutNotify(GameSettings.FieldOfView);
-            fieldOfViewValue.text = $"{GameSettings.FieldOfView:0}도";
-            if (!uiScaleRelease.Held)
+            if (radius != shownRadius)
             {
-                uiScale.SetValueWithoutNotify(Mathf.Round(GameSettings.UiScale * 100f));
-                uiScaleValue.text = $"{GameSettings.UiScale * 100f:0}%";
+                shownRadius = radius;
+                displayRadius.value.text = $"{radius}칸 (최대 {2 * radius * radius + 2 * radius + 1}개)";
             }
-            masterVolume.SetValueWithoutNotify(Mathf.Round(GameSettings.MasterVolume * 100f));
-            masterValue.text = $"{GameSettings.MasterVolume * 100f:0}%";
-            sfxVolume.SetValueWithoutNotify(Mathf.Round(GameSettings.SfxVolume * 100f));
-            sfxValue.text = $"{GameSettings.SfxVolume * 100f:0}%";
+            var sensitivity = GameSettings.MouseSensitivity;
+            mouseSensitivity.slider.SetValueWithoutNotify(sensitivity);
+            if (sensitivity != shownSensitivity)
+            {
+                shownSensitivity = sensitivity;
+                mouseSensitivity.value.text = $"{sensitivity:0.0}배";
+            }
+            var invert = GameSettings.InvertMouseY ? 1 : 0;
+            if (invert != shownInvert)
+            {
+                shownInvert = invert;
+                invertMouseY.value.text = invert == 1 ? "켜짐" : "꺼짐";
+            }
+            var fov = GameSettings.FieldOfView;
+            fieldOfView.slider.SetValueWithoutNotify(fov);
+            if (fov != shownFieldOfView)
+            {
+                shownFieldOfView = fov;
+                fieldOfView.value.text = $"{fov:0}도";
+            }
+            if (!uiScaleRelease.Held && !uiScaleDirty)                // never pull the slider back while it is being changed
+            {
+                var percent = Mathf.RoundToInt(GameSettings.UiScale * 100f);
+                uiScale.slider.SetValueWithoutNotify(percent);
+                ShowUiScale(percent);
+            }
+            ShowPercent(masterVolume, GameSettings.MasterVolume, ref shownMaster);
+            ShowPercent(sfxVolume, GameSettings.SfxVolume, ref shownSfx);
             RefreshScreenLabels();
+        }
+
+        static void ShowPercent(SliderField field, float value, ref int shown)
+        {
+            var percent = Mathf.RoundToInt(value * 100f);
+            field.slider.SetValueWithoutNotify(percent);
+            if (percent == shown) return;
+            shown = percent;
+            field.value.text = $"{percent}%";
+        }
+
+        void ShowUiScale(int percent)
+        {
+            if (percent == shownUiScale) return;
+            shownUiScale = percent;
+            uiScale.value.text = $"{percent}%";
+        }
+
+        /// <summary>The value text follows at once; the size itself applies in LateUpdate (keyboard) or on release (pointer).</summary>
+        void OnUiScaleChanged(float v)
+        {
+            ShowUiScale(Mathf.RoundToInt(v));
+            uiScaleDirty = true;
+        }
+
+        void ApplyUiScale()
+        {
+            uiScaleDirty = false;
+            GameSettings.UiScale = uiScale.slider.value / 100f;
         }
 
         static void ToggleInvert() => GameSettings.InvertMouseY = !GameSettings.InvertMouseY;
@@ -282,9 +371,19 @@ namespace WordRoom.Game
 
         void RefreshScreenLabels()
         {
-            if (modeValue == null) return;
-            modeValue.text = selectedFull ? "전체 화면" : "창 모드";
-            sizeValue.text = sizes.Count > 0 ? $"{sizes[sizeIndex].x} x {sizes[sizeIndex].y}" : $"{Screen.width} x {Screen.height}";
+            if (!ready) return;
+            var mode = selectedFull ? 1 : 0;
+            if (mode != shownMode)
+            {
+                shownMode = mode;
+                screenMode.value.text = selectedFull ? "전체 화면" : "창 모드";
+            }
+            var size = sizes.Count > 0 ? sizes[sizeIndex] : new Vector2Int(Screen.width, Screen.height);
+            if (size != shownSize)
+            {
+                shownSize = size;
+                resolution.value.text = $"{size.x} x {size.y}";
+            }
             applyButton.interactable = !pending;
         }
 
@@ -319,14 +418,20 @@ namespace WordRoom.Game
             ArchiveUi.Select(applyButton.gameObject);
         }
 
-        void RevertScreen()
+        void RevertScreen() => Revert(true);
+
+        /// <summary>
+        /// The previous screen comes back. While the panel is being disabled (`visible` false) its child row is not
+        /// switched — the hierarchy is changing state — and Open sets it again.
+        /// </summary>
+        void Revert(bool visible)
         {
             if (!pending) return;
             pending = false;
             ScreenOptions.Apply(previous);
-            if (confirmRow != null) confirmRow.SetActive(false);
+            if (visible) confirmRow.SetActive(false);
             SelectScreen(previous.FullScreen, new Vector2Int(previous.Width, previous.Height));
-            if (IsOpen && applyButton != null) ArchiveUi.Select(applyButton.gameObject);
+            if (visible && IsOpen) ArchiveUi.Select(applyButton.gameObject);
         }
     }
 }
