@@ -27,7 +27,7 @@ namespace WordRoom.EditorTools
         /// Only the coop lobby of the existing MainMenu scene (user-run; nothing here runs by itself):
         /// 1) MainMenuCanvas prefab: adds the 협동 button under Main (after 시작) only when there is no "Main/CoopButton";
         ///    everything else of the prefab stays as it is. 2) CoopCanvas prefab: built only when missing (an existing one
-        ///    is used as it is). 3) MainMenu scene: one CoopLobby and one CoopLobbyScreen on the MainMenu object (added
+        ///    is used as it is, except that the waiting room's difficulty row is added when it has none). 3) MainMenu scene: one CoopLobby and one CoopLobbyScreen on the MainMenu object (added
         ///    when the scene has none; several are reported and left alone), the screen's lobby/view and the menu's
         ///    coopButton/coop references when empty, one Coop Canvas instance (placed inactive when new); the scene's
         ///    EventSystem is checked. Nothing is deleted or replaced; no network object is made besides CoopLobby. Neither
@@ -52,6 +52,7 @@ namespace WordRoom.EditorTools
             EnsureCoopButton(notes, saved);
             var temporary = false;
             var coopPrefab = LoadOrBuild(ArchiveUiBuilder.CoopPrefabPath, ArchiveUiBuilder.BuildCoopCanvas, typeof(CoopLobbyView), notes, saved, ref temporary);
+            EnsureCoopDifficulty(notes, saved);
 
             var start = notes.Count;
             var scene = EditorSceneManager.OpenScene(MainMenuPath, OpenSceneMode.Single);
@@ -84,6 +85,45 @@ namespace WordRoom.EditorTools
             if (all.Length == 1) return all[0];
             notes.Add($"MainMenu: {typeof(T).Name} 추가('{PathOf(owner)}')");
             return owner.AddComponent<T>();
+        }
+
+        /// <summary>
+        /// Adds only the waiting room's difficulty row to the saved CoopCanvas prefab (after the RoomCode row) when it has
+        /// none and its CoopLobbyView has no difficulty parts connected; everything else of the prefab stays as it is.
+        /// </summary>
+        static void EnsureCoopDifficulty(System.Collections.Generic.List<string> notes, System.Collections.Generic.List<string> saved)
+        {
+            var path = ArchiveUiBuilder.CoopPrefabPath;
+            var contents = PrefabUtility.LoadPrefabContents(path);
+            try
+            {
+                var view = contents.GetComponent<CoopLobbyView>();
+                var waiting = contents.transform.Find("Waiting") as RectTransform;
+                if (view == null || waiting == null)
+                {
+                    notes.Add($"{Warning}{path}에 CoopLobbyView 또는 Waiting 패널이 없어 난이도 선택을 추가하지 않았습니다(대기실 시작 불가)");
+                    return;
+                }
+                if (view.HasDifficulty) return;                                   // already there (also user-made and connected)
+                if (waiting.Find(ArchiveUiBuilder.DifficultyRowName) != null)
+                {
+                    notes.Add($"{Warning}{path}의 Waiting/{ArchiveUiBuilder.DifficultyRowName}가 있지만 CoopLobbyView에 연결되지 않았습니다(바꾸지 않음). 직접 연결하세요");
+                    return;
+                }
+                var so = new SerializedObject(view);
+                var row = ArchiveUiBuilder.AddDifficultyRow(waiting, so);
+                var codeRow = waiting.Find("CodeRow");
+                if (codeRow != null) row.SetSiblingIndex(codeRow.GetSiblingIndex() + 1);
+                so.ApplyModifiedPropertiesWithoutUndo();
+                PrefabUtility.SaveAsPrefabAsset(contents, path, out var ok);
+                if (!ok) throw new InvalidOperationException($"{path}에 난이도 선택을 저장하지 못했습니다");
+                if (!saved.Contains(path)) saved.Add(path);
+                notes.Add($"{path}: Waiting/{ArchiveUiBuilder.DifficultyRowName}(난이도 선택) 추가 — 다른 항목은 그대로");
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(contents);
+            }
         }
 
         /// <summary>Adds only the 협동 button to the saved MainMenuCanvas prefab when it has none (after 시작).</summary>

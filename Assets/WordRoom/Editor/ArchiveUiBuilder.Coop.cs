@@ -243,6 +243,7 @@ namespace WordRoom.EditorTools
             var count = AddText(codeRow, "Count", "1 / 4명", 26f, ArchiveUi.IvoryDim, TextAlignmentOptions.Right);
             OneLine(count);
             Size(count.gameObject, 160f, 56f);
+            AddDifficultyRow(panel, so);
 
             SectionLabel(panel, "PlayersLabel", "참가자", 1000f);
             var list = NewRect("Players", panel);
@@ -282,6 +283,37 @@ namespace WordRoom.EditorTools
             Set(so, "startNote", note);
             Set(so, "leaveButton", leave);
             Set(so, "waitingMessage", message);
+        }
+
+        public const string DifficultyRowName = "DifficultyRow";
+
+        /// <summary>
+        /// The waiting room's difficulty row (label, 쉬움·보통·어려움 buttons, note) appended to `waiting` (its caller
+        /// places it after the RoomCode row) and connected to the CoopLobbyView of `so`.
+        /// </summary>
+        public static RectTransform AddDifficultyRow(RectTransform waiting, SerializedObject so)
+        {
+            var row = NewRect(DifficultyRowName, waiting);
+            Vertical(row, 8f, 0, TextAnchor.UpperLeft).childForceExpandWidth = true;
+            Size(row.gameObject, 1000f, 108f);
+            var buttonsRow = NewRect("Buttons", row);
+            Horizontal(buttonsRow, 16f, TextAnchor.MiddleLeft);
+            Size(buttonsRow.gameObject, -1f, 60f);
+            var label = AddText(buttonsRow, "Label", "난이도", 22f, ArchiveUi.IvoryDim, TextAlignmentOptions.Left);
+            OneLine(label);
+            Size(label.gameObject, 130f, 60f);
+            var buttons = new Button[3];
+            var names = new[] { "Easy", "Normal", "Hard" };
+            for (var i = 0; i < buttons.Length; i++)
+                buttons[i] = AddButton(buttonsRow, $"{names[i]}Button", GameLaunch.Label((Difficulty)i), 200f, 56f, 24f);
+            var note = AddText(row, "Note", "난이도: 보통 · 호스트가 정합니다", 20f, ArchiveUi.IvoryDim, TextAlignmentOptions.Left);
+            OneLine(note);
+            Size(note.gameObject, -1f, 32f);
+            var p = so.FindProperty("difficultyButtons") ?? throw new System.InvalidOperationException("CoopLobbyView에 'difficultyButtons' 필드가 없습니다");
+            p.arraySize = buttons.Length;
+            for (var i = 0; i < buttons.Length; i++) p.GetArrayElementAtIndex(i).objectReferenceValue = buttons[i];
+            Set(so, "difficultyText", note);
+            return row;
         }
 
         static CoopPlayerRow PlayerRow(RectTransform list, int index)

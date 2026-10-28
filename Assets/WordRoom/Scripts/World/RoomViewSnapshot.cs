@@ -80,11 +80,11 @@ namespace WordRoom.World
             return result;
         }
 
-        /// <param name="session">Valid only inside the coordinator's capture or Read callback.</param>
+        /// <param name="session">A SessionReader (only inside the coordinator's capture or Read callback) or an independent SessionCopy.</param>
         /// <param name="playerId">The player the view is centered on (the local player).</param>
         /// <param name="wordText">Surface of a word id (the dataset's existing lookup); called here, on the worker.</param>
         /// <param name="radius">Display radius (clamped to 1–3).</param>
-        public static RoomViewSnapshot Capture(SessionReader session, string playerId, Func<int, string> wordText, int radius = 1)
+        public static RoomViewSnapshot Capture(ISessionView session, string playerId, Func<int, string> wordText, int radius = 1)
         {
             radius = Math.Max(1, Math.Min(MaxRadius, radius));
             var center = session.PlayerPosition(playerId);
@@ -102,7 +102,7 @@ namespace WordRoom.World
             return s;
         }
 
-        void Add(SessionReader session, GridPos p, int word, Func<int, string> wordText)
+        void Add(ISessionView session, GridPos p, int word, Func<int, string> wordText)
         {
             rooms.Add(new KeyValuePair<GridPos, int>(p, word));
             if (session.IsPrepared(p)) prepared.Add(p);

@@ -113,9 +113,15 @@ namespace WordRoom.Network
         bool readyPending;
         bool unexpectedDisconnect;
         bool quitting;
+        bool handedOver;              // a confirmed coop start took the connection and the room (CoopSession); nothing to wind down here
+
+        static CoopLobby instance;    // the scene's lobby that registered for callbacks (one per scene)
 
         /// <summary>Raised on the main thread after every change of phase, list, room, participants or notice.</summary>
         public event Action Changed;
+
+        /// <summary>A coop start was confirmed: the game session owns the room and the connection now; the scene is about to change.</summary>
+        public bool HandedOver => handedOver;
 
         /// <summary>A coop screen is open and wants the lobby or a room.</summary>
         public bool Active => active;
@@ -166,8 +172,8 @@ namespace WordRoom.Network
 
         static string CurrentRoomName => PhotonNetwork.InRoom && PhotonNetwork.CurrentRoom != null ? PhotonNetwork.CurrentRoom.Name : null;
 
-        /// <summary>The current room is being left by a CoopRoomCleanup (not this flow's to show or leave).</summary>
-        static bool ClaimedByCleanup => CoopRoomCleanup.Claims(CurrentRoomName);
+        /// <summary>The current room is being left by a CoopRoomCleanup or a leaving CoopSession (not this flow's to show or leave).</summary>
+        static bool ClaimedByCleanup => CoopRoomCleanup.Claims(CurrentRoomName) || CoopSession.ClaimsLeaving(CurrentRoomName);
 
         /// <summary>In the room this component itself created or joined (and no cleanup has taken it).</summary>
         bool InOurRoom => ourRoom != null && CurrentRoomName == ourRoom && !ClaimedByCleanup;
@@ -176,7 +182,7 @@ namespace WordRoom.Network
         /// Whether entering or Retry should start a connection: there is none, or this component is disconnecting its
         /// own one right now (the user came back during the wind-down). Any other state is reused as it is.
         /// </summary>
-        bool NeedsConnection => IdleDisconnected || (op == Op.Disconnect && ourDisconnect);
+        bool NeedsConnection => IdleDisconnected || (op == Op.Disconnect && ourDisconnect) || CoopSession.DisconnectingOwned;
 
         // ---- requests from the screens -----------------------------------------------------------------------
         /// <summary>A coop screen opened: go to the lobby (connecting when needed). False with a notice when coop cannot be used.</summary>
@@ -187,7 +193,10 @@ namespace WordRoom.Network
                 PhotonNetwork.AddCallbackTarget(this);              // once; removed in OnDisable
                 registered = true;
             }
+            instance = this;
+            handedOver = false;
             active = true;
+            if (PhotonNetwork.IsConnectedAndReady) CoopSession.OwnDisconnect.Forget();   // a live connection: no intended end is still coming
             connectWanted = NeedsConnection;                       // an existing connection is reused: no wish is left behind
             SetNotice(null, false);
             if (PhotonNetwork.OfflineMode)
@@ -196,16 +205,59 @@ namespace WordRoom.Network
                 Raise();
                 return false;
             }
+            AdoptSession();
             Next();
             return true;
         }
+
+        /// <summary>
+        /// Back in the waiting room after a stopped start (same room, same connection): the room becomes this lobby's
+        /// own again and so does the connection's ownership, which the game session held meanwhile; the reason the
+        /// start stopped is shown once.
+        /// </summary>
+        void AdoptSession()
+        {
+            var s = CoopSession.Current;
+            if (s == null || s.Leaving || !PhotonNetwork.InRoom || s.RoomName != CurrentRoomName) return;
+            owned |= s.ReleaseOwnership();
+            ourRoom = CurrentRoomName;
+            if (s.AbortReason != null) SetNotice($"게임 시작이 중단되었습니다 — {s.AbortReason}", true);
+            s.ClearNotices();
+            s.ResumeWaiting();
+        }
+
+        /// <summary>
+        /// A confirmed start (CoopSession, also for a participant) takes over: this lobby's ownership of the connection
+        /// goes to the session, and it stops handling callbacks and winding down — the coming scene change is not an exit.
+        /// </summary>
+        internal static void HandOverToSession(CoopSession session)
+        {
+            var l = instance;
+            if (l == null || !l.registered || session == null) return;
+            session.TakeOwnership(l.owned);
+            l.owned = false;
+            l.handedOver = true;
+            l.active = false;
+            l.connectWanted = false;
+            l.op = Op.None;
+            l.requestedRoom = l.ourRoom = null;
+            l.readyPending = false;
+            l.ResetSettingsGate();
+            PhotonNetwork.RemoveCallbackTarget(l);
+            l.registered = false;
+            l.Raise();
+        }
+
+        /// <summary>The session currently in charge of this room's start, when there is one.</summary>
+        public CoopSession Session => watched != null && watched.RoomName == CurrentRoomName ? watched : null;
 
         /// <summary>The coop screens closed: winds down after the running operation (see the class summary).</summary>
         public void Exit()
         {
             if (!registered) return;
             active = false;
-            connectWanted = false;
+            connectWanted = false;                                 // closing the screen also cancels a wish to reconnect
+            rejoinCode = null;                                     // and a pending 다시 입장 (the settings question ends only when the room is left)
             Next();
         }
 
@@ -231,7 +283,12 @@ namespace WordRoom.Network
                 IsVisible = true,
                 PlayerTtl = 0,
                 EmptyRoomTtl = 0,
-                CustomRoomProperties = new Hashtable { { CoopRules.DisplayNameKey, CoopRules.CleanDisplayName(displayName, code) } },
+                CustomRoomProperties = new Hashtable
+                {
+                    { CoopRules.DisplayNameKey, CoopRules.CleanDisplayName(displayName, code) },
+                    { CoopRules.DifficultyKey, CoopRules.DefaultDifficulty },   // the host's choice (보통 first); not published to the lobby
+                    { CoopRules.SettingsKey, 1 },
+                },
                 CustomRoomPropertiesForLobby = new[] { CoopRules.DisplayNameKey },
             };
             ClearLocalReady();
@@ -299,11 +356,15 @@ namespace WordRoom.Network
             return Begin(Op.LeaveRoom, PhotonNetwork.LeaveRoom(false), "방 나가기 요청을 보낼 수 없습니다.");
         }
 
-        /// <summary>Sets the local participant's ready flag in the room (one change at a time, confirmed by the room).</summary>
+        /// <summary>
+        /// Sets the local participant's ready state in the room (one change at a time, confirmed by the room): ready is
+        /// stored as the settings revision it is for, so it counts only while those settings stay.
+        /// </summary>
         public bool SetReady(bool ready)
         {
-            if (Busy || readyPending || !PhotonNetwork.InRoom) return false;
-            if (!PhotonNetwork.LocalPlayer.SetCustomProperties(new Hashtable { { CoopRules.ReadyKey, ready } }))
+            if (Busy || readyPending || !PhotonNetwork.InRoom || StartInProgress || !settingsGate.Settled) return false;
+            var value = ready ? SettingsRevision : CoopRules.NotReady;
+            if (!PhotonNetwork.LocalPlayer.SetCustomProperties(new Hashtable { { CoopRules.ReadyKey, value } }))
             {
                 SetNotice("준비 상태를 보낼 수 없습니다.", true);
                 Raise();
@@ -312,6 +373,139 @@ namespace WordRoom.Network
             readyPending = true;
             Raise();
             return true;
+        }
+
+        // ---- settings and start (waiting room) -------------------------------------------------------------------
+        /// <summary>The host's difficulty of the current room (0 쉬움 · 1 보통 · 2 어려움; 보통 when the room has none).</summary>
+        public int Difficulty => CoopSession.RoomInt((registered || handedOver) && PhotonNetwork.InRoom ? PhotonNetwork.CurrentRoom : null, CoopRules.DifficultyKey, CoopRules.DefaultDifficulty);
+
+        /// <summary>Settings revision of the current room; every change voids the ready states given before it.</summary>
+        public int SettingsRevision => CoopSession.RoomInt((registered || handedOver) && PhotonNetwork.InRoom ? PhotonNetwork.CurrentRoom : null, CoopRules.SettingsKey, 0);
+
+        /// <summary>A start of this room is being confirmed or played (the waiting room's settings and ready are fixed meanwhile).</summary>
+        public bool StartInProgress
+        {
+            get
+            {
+                var s = CoopSession.Current;
+                return handedOver || (s != null && s.RoomName == CurrentRoomName && s.Stage != CoopStage.Waiting && s.Stage != CoopStage.Ended);
+            }
+        }
+
+        /// <summary>
+        /// Host only: a new difficulty, with a new settings revision (so every earlier ready is void). Sent as a checked
+        /// change of the revision the host saw, so two changes never merge. Only while the settings are settled.
+        /// </summary>
+        public bool SetDifficulty(int difficulty)
+        {
+            if (!IsLocalHost || Busy || StartInProgress || readyPending || !settingsGate.Settled || !CoopRules.IsValidDifficulty(difficulty) || difficulty == Difficulty) return false;
+            var room = PhotonNetwork.CurrentRoom;
+            var revision = SettingsRevision;
+            var hasRevision = room.CustomProperties != null && room.CustomProperties.ContainsKey(CoopRules.SettingsKey);
+            settingsGate.Begin(difficulty, revision + 1, room.Name, roomEntry, Now);   // start is blocked from the request on
+            WatchResponses(true);
+            var sent = room.SetCustomProperties(
+                new Hashtable { { CoopRules.DifficultyKey, difficulty }, { CoopRules.SettingsKey, revision + 1 } },
+                hasRevision ? new Hashtable { { CoopRules.SettingsKey, revision } } : null);
+            if (!sent)
+            {
+                settingsGate.NotSent();                                // nothing went out: the known settings stand
+                WatchResponses(false);
+                SetNotice("난이도 변경을 보낼 수 없었습니다. 설정은 그대로입니다.", true);
+            }
+            Raise();
+            return sent;
+        }
+
+        // ---- difficulty confirmation -----------------------------------------------------------------------------
+        // PUN reports a room property change through OnRoomPropertiesUpdate (sent to everyone, the sender included) and
+        // a refused change (e.g. the checked revision no longer matching) only as an operation response with an error
+        // code, which tells no request apart. While the change is not settled nothing else of this device changes
+        // properties (ready and start are blocked), so a refused SetProperties response then belongs to it. Neither a
+        // refusal nor the time limit tells the server's final settings: the state becomes Unknown and only a confirmed
+        // room update — or leaving the room (e.g. 다시 입장) — settles it. The gate belongs to one room entry (roomEntry):
+        // nothing of an older room or connection ever reaches a newer one.
+        readonly SettingsChangeGate settingsGate = new SettingsChangeGate();
+        bool watchingResponses;
+        int roomEntry;                       // grows with every room this component enters
+        string rejoinCode;                   // 다시 입장: the Room.Name to join once back in the lobby (one try); null = none
+
+        static double Now => Time.realtimeSinceStartupAsDouble;
+
+        /// <summary>This device's view of the room's settings (Settled, Waiting for a change, or Unknown).</summary>
+        public SettingsState SettingsStateHere => settingsGate.State;
+
+        /// <summary>The scene's lobby has a difficulty change not settled (checked again by the start itself).</summary>
+        internal static bool SettingsUnsettled => instance != null && !instance.settingsGate.Settled;
+
+        void WatchResponses(bool on)
+        {
+            if (on == watchingResponses || PhotonNetwork.NetworkingClient == null) return;
+            if (on) PhotonNetwork.NetworkingClient.OpResponseReceived += OnOperationResponse;
+            else PhotonNetwork.NetworkingClient.OpResponseReceived -= OnOperationResponse;
+            watchingResponses = on;
+        }
+
+        void OnOperationResponse(ExitGames.Client.Photon.OperationResponse response)
+        {
+            if (response.OperationCode != OperationCode.SetProperties || response.ReturnCode == 0) return;
+            if (settingsGate.Refused(CurrentRoomName, roomEntry) != SettingsChangeResult.BecameUnknown) return;
+            SetNotice("난이도 변경이 거절되어 현재 설정을 확인하지 못했습니다. 설정이 다시 알려지면 이어서 할 수 있고, 그렇지 않으면 다시 입장하세요.", true);
+            Raise();
+        }
+
+        /// <summary>A room update of this entry: the requested pair confirms it; other values of that revision or later settle it as they are.</summary>
+        void ObserveSettings()
+        {
+            var r = settingsGate.Observe(CurrentRoomName, roomEntry, Difficulty, SettingsRevision);
+            if (r == SettingsChangeResult.None) return;
+            WatchResponses(false);
+            if (r == SettingsChangeResult.Superseded) SetNotice("난이도가 다른 값으로 확정되었습니다. 현재 설정으로 다시 준비하세요.", true);
+            else SetNotice(null, false);
+        }
+
+        /// <summary>Only leaving the room (or the connection), entering anew, or this component going away ends the question.</summary>
+        void ResetSettingsGate()
+        {
+            settingsGate.Reset();
+            WatchResponses(false);
+        }
+
+        void Update()
+        {
+            if (settingsGate.CheckTimeout(Now) != SettingsChangeResult.BecameUnknown) return;
+            SetNotice("난이도 변경을 아직 확인하지 못했습니다. 늦게 확인되면 이어서 할 수 있고, 그렇지 않으면 다시 입장하세요.", true);
+            Raise();
+        }
+
+        /// <summary>
+        /// Recovery from Unknown settings: leaves this room and, once back in the lobby, joins the same Room.Name once —
+        /// the room's settings are then those received with the new entry. Refused when the leave cannot be sent (the
+        /// question then stays). The host role may pass to another participant meanwhile.
+        /// </summary>
+        public bool RejoinToRecover()
+        {
+            if (settingsGate.State != SettingsState.Unknown || Busy || !PhotonNetwork.InRoom || ClaimedByCleanup) return false;
+            var code = CurrentRoomName;
+            SetNotice(null, false);
+            if (!Begin(Op.LeaveRoom, PhotonNetwork.LeaveRoom(false), "방 나가기 요청을 보낼 수 없습니다. 설정 확인 전까지 시작할 수 없습니다.")) return false;
+            rejoinCode = code;                                         // joined once the lobby is back (Advance)
+            return true;
+        }
+
+        /// <summary>Host only: confirms the start (every condition is checked again by the session).</summary>
+        public bool RequestStart()
+        {
+            var s = CoopSession.Current;
+            string why;
+            if (!IsLocalHost) why = "호스트만 시작할 수 있습니다.";
+            else if (settingsGate.State == SettingsState.Waiting) why = "난이도 변경을 확인하는 중입니다. 잠시 후 다시 시작하세요.";
+            else if (settingsGate.State == SettingsState.Unknown) why = "현재 설정을 확인하지 못해 시작할 수 없습니다. 다시 입장하세요.";
+            else if (Busy || s == null || s.RoomName != CurrentRoomName) why = "아직 시작할 수 없습니다.";
+            else if (s.TryStartAsHost(Difficulty, SettingsRevision, out why)) return true;
+            SetNotice(why, true);
+            Raise();
+            return false;
         }
 
         bool CanRequestFromLobby()
@@ -329,7 +523,7 @@ namespace WordRoom.Network
         // ---- current room ------------------------------------------------------------------------------------
         public bool TryGetRoom(out WaitingRoom room)
         {
-            var r = registered && PhotonNetwork.InRoom ? PhotonNetwork.CurrentRoom : null;
+            var r = (registered || handedOver) && PhotonNetwork.InRoom ? PhotonNetwork.CurrentRoom : null;
             if (r == null)
             {
                 room = default;
@@ -344,7 +538,7 @@ namespace WordRoom.Network
         public void GetParticipants(List<Participant> into)
         {
             into.Clear();
-            var r = registered && PhotonNetwork.InRoom ? PhotonNetwork.CurrentRoom : null;
+            var r = (registered || handedOver) && PhotonNetwork.InRoom ? PhotonNetwork.CurrentRoom : null;
             if (r == null) return;
             foreach (var p in r.Players.Values)
             {
@@ -354,11 +548,13 @@ namespace WordRoom.Network
             into.Sort((a, b) => a.ActorNumber.CompareTo(b.ActorNumber));
         }
 
-        static bool IsReady(Player p) => p.CustomProperties != null && p.CustomProperties.TryGetValue(CoopRules.ReadyKey, out var v) && v is bool b && b;
+        /// <summary>Ready for the room's current settings revision (a ready of earlier settings does not count).</summary>
+        bool IsReady(Player p) =>
+            p.CustomProperties != null && p.CustomProperties.TryGetValue(CoopRules.ReadyKey, out var v) && CoopRules.IsReadyFor(v, SettingsRevision);
 
-        public bool LocalReady => registered && PhotonNetwork.InRoom && IsReady(PhotonNetwork.LocalPlayer);
+        public bool LocalReady => (registered || handedOver) && PhotonNetwork.InRoom && IsReady(PhotonNetwork.LocalPlayer);
 
-        public bool IsLocalHost => registered && PhotonNetwork.InRoom && PhotonNetwork.IsMasterClient;
+        public bool IsLocalHost => (registered || handedOver) && PhotonNetwork.InRoom && PhotonNetwork.IsMasterClient;
 
         // ---- next step ---------------------------------------------------------------------------------------
         bool Begin(Op o, bool sent, string failure)
@@ -377,7 +573,19 @@ namespace WordRoom.Network
                 if (active) Advance();
                 else Settle();
             }
+            if (active && PhotonNetwork.InRoom && !ClaimedByCleanup) Watch(CoopSession.EnsureForCurrentRoom());   // the room's start manager
             Raise();
+        }
+
+        CoopSession watched;
+
+        /// <summary>The waiting room follows the session's start state; one subscription per session object at most.</summary>
+        void Watch(CoopSession s)
+        {
+            if (watched == s) return;
+            if (watched != null) watched.Changed -= Raise;
+            watched = s;
+            if (s != null) s.Changed += Raise;
         }
 
         void Advance()
@@ -386,6 +594,12 @@ namespace WordRoom.Network
             if (PhotonNetwork.InLobby)
             {
                 if (!lobbyJoinedByUs) JoinLobby();                    // someone else's lobby: join again for a full list
+                else if (rejoinCode != null)
+                {
+                    var code = rejoinCode;                             // 다시 입장: one join of the room just left
+                    rejoinCode = null;
+                    if (!Join(code)) SetNotice("방에 다시 들어가지 못했습니다. 목록이나 RoomCode로 다시 참가하세요.", true);
+                }
                 return;
             }
             if (PhotonNetwork.IsConnectedAndReady && PhotonNetwork.Server == ServerConnection.MasterServer)
@@ -434,6 +648,7 @@ namespace WordRoom.Network
                 return;
             }
             unexpectedDisconnect = false;
+            CoopSession.OwnDisconnect.Forget();                     // a new connection: an older intended end never describes it
             if (Begin(Op.Connect, PhotonNetwork.ConnectUsingSettings(), "Photon 연결을 시작할 수 없습니다(설정·상태 확인).")) owned = true;
         }
 
@@ -474,7 +689,10 @@ namespace WordRoom.Network
         /// </summary>
         void OnDisable()
         {
-            if (!registered) return;
+            if (instance == this) instance = null;
+            Watch(null);
+            ResetSettingsGate();                                   // this component goes away (its room is left or handed over)
+            if (!registered) return;                               // never entered, or handed over to a coop start: nothing to wind down
             PhotonNetwork.RemoveCallbackTarget(this);
             registered = false;
             active = false;
@@ -501,9 +719,15 @@ namespace WordRoom.Network
         {
             if (op == Op.Connect || op == Op.LeaveRoom) op = Op.None;   // a left room ends here, back on the master server
             connectWanted = false;                                       // connected: the wish is fulfilled (lobby rejoins need none)
+            CoopSession.OwnDisconnect.Forget();                          // a connection is up: an older intended end is over
             Next();
         }
 
+        /// <summary>
+        /// Intended (this lobby's own Disconnect, or a coop session's recorded one — also when that session has already
+        /// gone) or a failure. After an intended end the wish of a user who entered meanwhile is kept and connects once;
+        /// after a failure every wish is dropped (no automatic reconnect).
+        /// </summary>
         public void OnDisconnected(DisconnectCause cause)
         {
             op = Op.None;
@@ -511,9 +735,13 @@ namespace WordRoom.Network
             lobbyJoinedByUs = false;
             readyPending = false;
             requestedRoom = ourRoom = null;
+            rejoinCode = null;
             rooms.Clear();
-            var requested = ourDisconnect;
+            ResetSettingsGate();
+            var bySession = CoopSession.OwnDisconnect.Consume();
+            var requested = ourDisconnect || bySession;
             ourDisconnect = false;
+            if (!DisconnectExpectation.ShouldReconnect(requested, active, connectWanted)) connectWanted = false;
             if (!requested)
             {
                 connectWanted = false;                                   // never reconnect by itself after an unexpected end
@@ -603,6 +831,8 @@ namespace WordRoom.Network
             requestedRoom = null;
             lobbyJoinedByUs = false;                                // entering a room leaves the lobby
             readyPending = false;
+            roomEntry++;                                            // a new entry: its settings are those received with it
+            ResetSettingsGate();
             rooms.Clear();
             Next();                                                 // no longer Active (went back meanwhile): leaves its own room again
         }
@@ -625,6 +855,7 @@ namespace WordRoom.Network
         public void OnLeftRoom()
         {
             readyPending = false;
+            ResetSettingsGate();                                   // the room is really left: its question is gone
             if (op != Op.LeaveRoom && active && ourRoom != null) SetNotice("방에서 나왔습니다.", false);   // not for a cleanup's leave
             ourRoom = null;
             Raise();                                                // the lobby follows on OnConnectedToMaster
@@ -635,7 +866,11 @@ namespace WordRoom.Network
 
         public void OnPlayerLeftRoom(Player otherPlayer) => Raise();
 
-        public void OnRoomPropertiesUpdate(Hashtable propertiesThatChanged) => Raise();
+        public void OnRoomPropertiesUpdate(Hashtable propertiesThatChanged)
+        {
+            ObserveSettings();
+            Raise();
+        }
 
         public void OnPlayerPropertiesUpdate(Player targetPlayer, Hashtable changedProps)
         {
@@ -645,6 +880,7 @@ namespace WordRoom.Network
 
         public void OnMasterClientSwitched(Player newMasterClient)
         {
+            // a change of this device stays in question when the host role moves (it may still apply on the server)
             if (newMasterClient != null)
                 SetNotice($"호스트가 {(string.IsNullOrWhiteSpace(newMasterClient.NickName) ? CoopRules.DefaultParticipantName(newMasterClient.ActorNumber) : newMasterClient.NickName)}(으)로 바뀌었습니다.", false);
             Raise();

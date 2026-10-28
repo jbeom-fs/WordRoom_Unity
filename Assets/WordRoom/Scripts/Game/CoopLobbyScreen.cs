@@ -18,8 +18,10 @@ namespace WordRoom.Game
     /// details and 입장 (enabled only while it can be joined), 방 만들기, RoomCode entry (JoinRoom only — a wrong code
     /// never creates a room), 뒤로. "No connection yet", "waiting for the list" and "no rooms" are told apart.
     /// Waiting room: display name, RoomCode with 복사, count, participants with host and ready badges, the local
-    /// ready toggle, 나가기 (the lobby comes back once Photon confirmed the leave). 시작 is shown but stays disabled:
-    /// there is no coop start yet, and it never starts a single-player game instead.
+    /// ready toggle, 나가기 (the lobby comes back once Photon confirmed the leave), the host's difficulty (쉬움·보통·어려움,
+    /// 보통 first; only the host can change it, a change voids every ready) and 시작 — enabled for the host only while
+    /// 2–4 participants are all ready for the current settings and nothing starts; the click goes to the coop session,
+    /// which checks everything again and starts the coop game (never a single-player game).
     /// Escape does one thing per press: an input field being typed in keeps it, else the create panel closes, the
     /// waiting room leaves, the lobby goes back to the main menu. Listeners are bound once in Awake and removed in
     /// OnDestroy; CoopLobby.Changed is subscribed once as well, so repeated visits add nothing.
@@ -48,6 +50,8 @@ namespace WordRoom.Game
         string localMessage;                // the screen's own short note (copy, vanished selection); cleared by the next request
         bool localMessageIsError;
         string shownNotice;
+        bool hasDifficulty;
+        Color[] difficultyNormal;
 
         /// <summary>Raised when the screen closed back to the main menu.</summary>
         public event Action Closed;
@@ -89,10 +93,23 @@ namespace WordRoom.Game
             ArchiveUi.Bind(bindings, view.copyCodeButton, CopyCode);
             ArchiveUi.Bind(bindings, view.readyButton, ToggleReady);
             ArchiveUi.Bind(bindings, view.leaveButton, Leave);
+            ArchiveUi.Bind(bindings, view.startButton, StartGame);
+            hasDifficulty = view.HasDifficulty;
+            if (hasDifficulty)
+            {
+                difficultyNormal = new Color[view.difficultyButtons.Length];
+                for (var i = 0; i < view.difficultyButtons.Length; i++)
+                {
+                    var d = i;
+                    difficultyNormal[i] = view.difficultyButtons[i].colors.normalColor;
+                    ArchiveUi.Bind(bindings, view.difficultyButtons[i], () => ChooseDifficulty(d));
+                }
+            }
+            else Debug.LogWarning("[협동] 대기실 난이도 UI가 없어 게임 시작을 할 수 없습니다(대기실의 다른 기능은 그대로). WordRoom/협동 로비 구성 메뉴로 추가하세요.", this);
             submitCode = _ => JoinCode();                                  // Enter in the RoomCode field
             view.codeInput.onSubmit.AddListener(submitCode);
             view.nameInput.characterLimit = CoopRules.MaxDisplayNameLength;
-            view.startButton.interactable = false;                         // no coop start yet (see the class summary)
+            view.startButton.interactable = false;                         // follows the start condition in Refresh
             sizeNormal = new Color[view.sizeButtons.Length];
             for (var i = 0; i < sizeNormal.Length; i++) sizeNormal[i] = view.sizeButtons[i].colors.normalColor;
             view.roomRowTemplate.gameObject.SetActive(false);
@@ -159,7 +176,7 @@ namespace WordRoom.Game
             get
             {
                 var p = lobby.Phase;
-                return p == CoopPhase.InRoom || p == CoopPhase.LeavingRoom;
+                return p == CoopPhase.InRoom || p == CoopPhase.LeavingRoom || lobby.HandedOver;
             }
         }
 
@@ -233,16 +250,42 @@ namespace WordRoom.Game
             SetLocalMessage("RoomCode를 복사했습니다.", false);
         }
 
+        /// <summary>준비 / 준비 취소 — or 다시 입장 while the room's settings are unknown here (the only way to learn them anew).</summary>
         void ToggleReady()
         {
             ClearLocalMessage();
-            lobby.SetReady(!lobby.LocalReady);
+            if (lobby.SettingsStateHere == SettingsState.Unknown) lobby.RejoinToRecover();
+            else lobby.SetReady(!lobby.LocalReady);
         }
 
         void Leave()
         {
             ClearLocalMessage();
             lobby.LeaveRoom();
+        }
+
+        void ChooseDifficulty(int d)
+        {
+            ClearLocalMessage();
+            lobby.SetDifficulty(d);                                        // host only; the room's confirmation redraws
+        }
+
+        /// <summary>Host: the same conditions as the button, then the session checks everything once more.</summary>
+        void StartGame()
+        {
+            ClearLocalMessage();
+            if (!hasDifficulty || !CanStartNow(out _)) return;
+            lobby.RequestStart();
+        }
+
+        bool CanStartNow(out int readyCount)
+        {
+            readyCount = 0;
+            foreach (var p in participants)
+                if (p.IsReady) readyCount++;
+            var session = lobby.Session;
+            return lobby.Phase == CoopPhase.InRoom && !lobby.Busy && !lobby.StartInProgress && session != null &&
+                   CoopStartRules.HostCanStart(lobby.IsLocalHost, true, participants.Count, readyCount, lobby.SettingsStateHere, session.Stage);   // same rule as the final check
         }
 
         void SetLocalMessage(string text, bool error)
@@ -265,7 +308,7 @@ namespace WordRoom.Game
                 shownNotice = lobby.Notice;
                 if (shownNotice != null) localMessage = null;
             }
-            var room = phase == CoopPhase.InRoom || phase == CoopPhase.LeavingRoom;
+            var room = phase == CoopPhase.InRoom || phase == CoopPhase.LeavingRoom || lobby.HandedOver;
             if (room) createOpen = false;                                  // entered: the create panel has done its job
             SetActive(view.waitingPanel, room);
             SetActive(view.lobbyPanel, !room);
@@ -365,25 +408,68 @@ namespace WordRoom.Game
             }
             if (participants.Count > view.playerRows.Length) Debug.LogWarning($"[협동] 참가자 {participants.Count}명 중 {view.playerRows.Length}명만 표시합니다(최대 인원 {CoopRules.MaxPlayers}).");
 
-            var canAct = phase == CoopPhase.InRoom && !lobby.Busy;
-            view.readyLabel.text = lobby.LocalReady ? "준비 취소" : "준비";
-            view.readyButton.interactable = canAct && !lobby.ReadyPending;
-            view.leaveButton.interactable = canAct;
-            view.startButton.interactable = false;                         // start condition shown, start itself not connected yet
+            var starting = lobby.StartInProgress;
+            var settings = lobby.SettingsStateHere;
+            var idle = phase == CoopPhase.InRoom && !lobby.Busy && !starting;
+            var canAct = idle && settings == SettingsState.Settled;
             var host = lobby.IsLocalHost;
-            if (CoopRules.CanStart(host, participants.Count, readyCount))
-                view.startNote.text = "시작 조건 충족 — 협동 게임 시작은 아직 연결되지 않았습니다";
+            if (settings == SettingsState.Unknown)
+            {
+                view.readyLabel.text = "다시 입장";                       // recovery: leave and join this room again
+                view.readyButton.interactable = idle;
+            }
+            else
+            {
+                view.readyLabel.text = lobby.LocalReady ? "준비 취소" : "준비";
+                view.readyButton.interactable = canAct && !lobby.ReadyPending;
+            }
+            view.leaveButton.interactable = idle;                         // leaving is always possible outside a start
+            RefreshDifficulty(host, canAct);
+            var canStart = hasDifficulty && CanStartNow(out readyCount);
+            view.startButton.interactable = canStart;                     // the session checks every condition again on the click
+            if (starting)
+                view.startNote.text = "게임을 시작하는 중입니다…";
+            else if (settings == SettingsState.Waiting)
+                view.startNote.text = "난이도 변경을 확인하는 중입니다…";
+            else if (settings == SettingsState.Unknown)
+                view.startNote.text = "설정을 확인하지 못해 시작할 수 없습니다. 늦게 확인되면 이어지고, 아니면 다시 입장하세요";
+            else if (!hasDifficulty)
+                view.startNote.text = "화면 구성이 완료되지 않아 게임을 시작할 수 없습니다";
+            else if (canStart)
+                view.startNote.text = "모두 준비되었습니다. 시작할 수 있습니다";
             else if (host)
-                view.startNote.text = $"{CoopRules.MinPlayers}명 이상 모두 준비하면 시작 조건이 충족됩니다 ({readyCount}/{participants.Count} 준비)";
+                view.startNote.text = $"{CoopRules.MinPlayers}명 이상 모두 준비하면 시작할 수 있습니다 ({readyCount}/{participants.Count} 준비)";
             else
                 view.startNote.text = $"호스트가 시작합니다 ({readyCount}/{participants.Count} 준비)";
 
+            var sessionNotice = lobby.Session != null ? lobby.Session.Notice : null;
             if (leaving)
             {
                 view.waitingMessage.text = "방을 나가는 중입니다…";
                 view.waitingMessage.color = ArchiveUi.IvoryDim;
             }
+            else if (sessionNotice != null && localMessage == null && lobby.Notice == null)
+            {
+                view.waitingMessage.text = sessionNotice;
+                view.waitingMessage.color = ArchiveUi.IvoryDim;
+            }
             else WriteMessage(view.waitingMessage);
+        }
+
+        /// <summary>The host's choice shown to everyone (chosen button and words); only the host can change it, and only while nothing starts.</summary>
+        void RefreshDifficulty(bool host, bool canAct)
+        {
+            if (!hasDifficulty) return;
+            var current = lobby.Difficulty;
+            for (var i = 0; i < view.difficultyButtons.Length; i++)
+            {
+                ArchiveUi.SetNormalColor(view.difficultyButtons[i], i == current ? ArchiveUi.Chosen : difficultyNormal[i]);
+                view.difficultyButtons[i].interactable = host && canAct;
+            }
+            var label = GameLaunch.Label((Difficulty)current);
+            view.difficultyText.text = host
+                ? $"난이도: {label} · 바꾸면 모두 다시 준비합니다"
+                : $"난이도: {label} · 호스트가 정합니다";
         }
 
         void SetLocalMessageSilently(string text, bool error)

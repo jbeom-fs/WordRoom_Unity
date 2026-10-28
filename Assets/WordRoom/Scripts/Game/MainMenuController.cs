@@ -134,6 +134,8 @@ namespace WordRoom.Game
             if (!ready) return;
             if (settings.IsOpen) settings.gameObject.SetActive(false);   // saved open in the scene: start on the main screen
             ShowMain();
+            if (coopButton != null && coop != null && WordRoom.Network.CoopSession.ConsumeWaitingRoomReturn())
+                ShowCoop();                                              // a stopped coop start: back to the same room's waiting room
         }
 
         void Update()

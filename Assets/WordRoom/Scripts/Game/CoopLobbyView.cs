@@ -57,6 +57,24 @@ namespace WordRoom.Game
         public Button leaveButton;
         public TextMeshProUGUI waitingMessage;
 
+        [Header("대기실 난이도 (WordRoom/협동 로비 구성으로 추가)")]
+        [Tooltip("쉬움·보통·어려움 순서. 호스트만 누를 수 있습니다.")]
+        public Button[] difficultyButtons = new Button[3];
+        [Tooltip("현재 난이도와 바꿀 수 있는 사람 안내")]
+        public TextMeshProUGUI difficultyText;
+
+        /// <summary>The waiting room's difficulty parts are all there (a canvas saved before them has none: no start then).</summary>
+        public bool HasDifficulty
+        {
+            get
+            {
+                if (difficultyText == null || difficultyButtons == null || difficultyButtons.Length != 3) return false;
+                foreach (var b in difficultyButtons)
+                    if (b == null) return false;
+                return true;
+            }
+        }
+
         /// <summary>Missing parts by field name, or null when complete.</summary>
         public string MissingParts()
         {

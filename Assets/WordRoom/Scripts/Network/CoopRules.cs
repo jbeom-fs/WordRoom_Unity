@@ -21,8 +21,49 @@ namespace WordRoom.Network
         /// <summary>Room property published to the lobby (CustomRoomPropertiesForLobby): the display name. Nothing else is published.</summary>
         public const string DisplayNameKey = "wn";
 
-        /// <summary>Participant property: ready in the waiting room (bool). Absent = not ready.</summary>
+        /// <summary>
+        /// Participant property: ready in the waiting room, as the settings revision (int) the participant was ready
+        /// for. Ready only while it equals the room's current SettingsKey; absent or another value = not ready, so a late
+        /// ready of older settings never counts for newer ones.
+        /// </summary>
         public const string ReadyKey = "wr";
+
+        /// <summary>Room property (not published to the lobby): the difficulty chosen by the host, 0 쉬움 · 1 보통 · 2 어려움.</summary>
+        public const string DifficultyKey = "wd";
+
+        /// <summary>Room property (not published): settings revision, raised by every difficulty change and every stopped start.</summary>
+        public const string SettingsKey = "ws";
+
+        public const int DefaultDifficulty = 1;
+        public const int DifficultyCount = 3;
+        public const int NotReady = -1;
+
+        /// <summary>Scene names (as in the build list) the coop flow loads.</summary>
+        public const string GameplayScene = "Gameplay";
+        public const string MainMenuScene = "MainMenu";
+
+        /// <summary>Delay added to the server time when the common start is fixed, so every device has the start message before it.</summary>
+        public const int StartLeadMilliseconds = 1500;
+
+        /// <summary>Default limit from the start's confirmation to every participant placed (data loading included).</summary>
+        public const float DefaultReadyTimeoutSeconds = 120f;
+
+        /// <summary>A participant gives up waiting this much later than the host's limit (the host normally stops the start first).</summary>
+        public const float GuestGraceSeconds = 15f;
+
+        public static bool IsValidDifficulty(int d) => d >= 0 && d < DifficultyCount;
+
+        /// <summary>A ready property value counted for `revision`.</summary>
+        public static bool IsReadyFor(object readyValue, int revision) => readyValue is int r && r == revision && r != NotReady;
+
+        /// <summary>
+        /// Photon's server time (int milliseconds, wrapping around) has reached `target`: the signed difference handles
+        /// the wrap for any two times less than about 24 days apart.
+        /// </summary>
+        public static bool ServerTimeReached(int now, int target) => unchecked(now - target) >= 0;
+
+        /// <summary>Seconds from `target` to `now` on the server clock (negative before it), wrap-safe like ServerTimeReached.</summary>
+        public static double ServerSecondsSince(int now, int target) => unchecked(now - target) / 1000.0;
 
         /// <summary>Letters and digits without the easily confused 0/O and 1/I/L.</summary>
         const string CodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";

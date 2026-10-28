@@ -2,6 +2,7 @@
     "name": "WordRoom.Network",
     "rootNamespace": "WordRoom.Network",
     "references": [
+        "WordRoom.Generation",
         "PhotonRealtime",
         "PhotonUnityNetworking"
     ],

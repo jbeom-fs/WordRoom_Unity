@@ -12,7 +12,7 @@ namespace WordRoom.Generation
     /// that or from another thread throw InvalidOperationException. Only values and copies come out: no shared
     /// collection, PlacedRoom or link object of the world is handed out.
     /// </summary>
-    public sealed class SessionReader
+    public sealed class SessionReader : ISessionView
     {
         readonly SessionState session;
         readonly RoomMap world;
@@ -194,38 +194,88 @@ namespace WordRoom.Generation
             Visits = Array.AsReadOnly(p.Visits.OrderBy(kv => kv.Key).ToArray());
             Path = Array.AsReadOnly(p.Path.ToArray());
         }
+
+        internal PlayerCopy(SessionCopyParts.Player p)
+        {
+            Id = p.Id;
+            Position = p.Position;
+            Moves = p.Moves;
+            Visits = Array.AsReadOnly(p.Visits.OrderBy(kv => kv.Key).ToArray());
+            Path = Array.AsReadOnly(p.Path.ToArray());
+        }
+    }
+
+    /// <summary>
+    /// The values a SessionCopy is restored from (e.g. decoded from a host's message on a device without a
+    /// coordinator). Only what a display needs: no generation records, recent words, unfilled records or results.
+    /// </summary>
+    public sealed class SessionCopyParts
+    {
+        public sealed class Player
+        {
+            public string Id;
+            public GridPos Position;
+            public int Moves;
+            public List<KeyValuePair<GridPos, int>> Visits = new List<KeyValuePair<GridPos, int>>();
+            public List<GridPos> Path = new List<GridPos>();
+        }
+
+        public string SessionId;
+        public SessionMode Mode;
+        public long Revision;
+        public int StartWord;
+        public int TargetWord;
+        public long Seed;
+        public string PackageId;
+        public string Status;
+        /// <summary>Rooms in creation order (the start room first, at the origin).</summary>
+        public List<KeyValuePair<GridPos, int>> Rooms = new List<KeyValuePair<GridPos, int>>();
+        public List<GridPos> Prepared = new List<GridPos>();
+        public List<GridPos> TeamVisited = new List<GridPos>();
+        public List<RoomConnection> OpenDoors = new List<RoomConnection>();
+        public List<Player> Players = new List<Player>();
     }
 
     /// <summary>
     /// The whole session at one revision (world, players and session state of the same confirmed change number), for
     /// recovering a display that missed a change. Independent of the live state: nothing in it reaches the session.
-    /// The dataset and the generator's derived caches are not part of it.
+    /// The dataset and the generator's derived caches are not part of it. Also a read-only ISessionView, so a display
+    /// can be captured from it directly — including a copy restored from parts (Restore) on a device that only shows
+    /// a host's confirmed state and never runs a generator.
     /// </summary>
-    public sealed class SessionCopy
+    public sealed class SessionCopy : ISessionView
     {
-        public string SessionId { get; }
-        public SessionMode Mode { get; }
-        public long Revision { get; }
-        public int StartWord { get; }
-        public int TargetWord { get; }
-        public long Seed { get; }
-        public string PackageId { get; }
-        public bool Started { get; }
-        public string Status { get; }
-        public string FailureReason { get; }
-        public double PlayStartedAt { get; }
-        public SessionResult Result { get; }
+        public string SessionId { get; private set; }
+        public SessionMode Mode { get; private set; }
+        public long Revision { get; private set; }
+        public int StartWord { get; private set; }
+        public int TargetWord { get; private set; }
+        public long Seed { get; private set; }
+        public string PackageId { get; private set; }
+        public bool Started { get; private set; }
+        public string Status { get; private set; }
+        public string FailureReason { get; private set; }
+        public double PlayStartedAt { get; private set; }
+        public SessionResult Result { get; private set; }
 
         /// <summary>Every committed room in creation order.</summary>
-        public IReadOnlyList<RoomRecord> Rooms { get; }
-        public IReadOnlyList<GridPos> Prepared { get; }
-        public IReadOnlyList<UnfilledCopy> Unfilled { get; }
+        public IReadOnlyList<RoomRecord> Rooms { get; private set; }
+        public IReadOnlyList<GridPos> Prepared { get; private set; }
+        public IReadOnlyList<UnfilledCopy> Unfilled { get; private set; }
         /// <summary>Recent generated words, oldest first (the world's single history).</summary>
-        public IReadOnlyList<int> Recent { get; }
-        public IReadOnlyList<GridPos> TeamVisited { get; }
-        public IReadOnlyList<RoomConnection> OpenDoors { get; }
+        public IReadOnlyList<int> Recent { get; private set; }
+        public IReadOnlyList<GridPos> TeamVisited { get; private set; }
+        public IReadOnlyList<RoomConnection> OpenDoors { get; private set; }
         /// <summary>Registered players in registration order.</summary>
-        public IReadOnlyList<PlayerCopy> Players { get; }
+        public IReadOnlyList<PlayerCopy> Players { get; private set; }
+
+        readonly Dictionary<GridPos, int> wordAt = new Dictionary<GridPos, int>();
+        readonly HashSet<GridPos> preparedSet = new HashSet<GridPos>();
+        readonly HashSet<RoomConnection> openSet = new HashSet<RoomConnection>();
+
+        SessionCopy()
+        {
+        }
 
         internal SessionCopy(SessionState s, RoomMap w)
         {
@@ -251,8 +301,110 @@ namespace WordRoom.Generation
             TeamVisited = Array.AsReadOnly(w.TeamVisited.OrderBy(p => p).ToArray());
             OpenDoors = w.Doors.OpenConnections().AsReadOnly();
             Players = Array.AsReadOnly(s.Players.Select(p => new PlayerCopy(p)).ToArray());
+            Index();
+        }
+
+        void Index()
+        {
+            foreach (var r in Rooms) wordAt[r.Position] = r.Word;
+            foreach (var p in Prepared) preparedSet.Add(p);
+            foreach (var d in OpenDoors) openSet.Add(d);
         }
 
         public PlayerCopy FindPlayer(string playerId) => Players.FirstOrDefault(p => p.Id == playerId);
+
+        // ---- ISessionView -----------------------------------------------------------------------------------
+        public GridPos PlayerPosition(string playerId) =>
+            (FindPlayer(playerId) ?? throw new ArgumentException($"등록되지 않은 플레이어: {playerId}")).Position;
+
+        public bool TryGetWord(GridPos p, out int word) => wordAt.TryGetValue(p, out word);
+        public bool HasRoom(GridPos p) => wordAt.ContainsKey(p);
+        public bool IsPrepared(GridPos p) => preparedSet.Contains(p);
+        public DoorState Door(RoomConnection id) => openSet.Contains(id) ? DoorState.Open : DoorState.Closed;
+
+        // ---- restore ------------------------------------------------------------------------------------------
+        /// <summary>
+        /// A copy made from `parts` after checking that they describe one consistent state: the start room at the
+        /// origin with the start word, no coordinate twice, prepared / team-visited / door coordinates on existing rooms
+        /// (doors between adjacent existing rooms), unique players standing in existing rooms they visited, paths ending
+        /// there, and every personal visit inside the team's. Throws ArgumentException with the reason otherwise.
+        /// Recent words, unfilled records, generation records and results are not part of a restored copy.
+        /// </summary>
+        public static SessionCopy Restore(SessionCopyParts parts)
+        {
+            if (parts == null) throw new ArgumentException("사본 정보가 없습니다.");
+            if (string.IsNullOrEmpty(parts.SessionId)) throw new ArgumentException("세션 ID가 비어 있습니다.");
+            if (parts.Revision < 1) throw new ArgumentException($"변경 순번이 올바르지 않습니다({parts.Revision}).");
+            if (string.IsNullOrEmpty(parts.Status)) throw new ArgumentException("세션 상태가 비어 있습니다.");
+            if (parts.Rooms == null || parts.Rooms.Count == 0) throw new ArgumentException("방이 없습니다.");
+            if (parts.Rooms[0].Key != GridPos.Origin || parts.Rooms[0].Value != parts.StartWord) throw new ArgumentException("첫 방이 원점의 시작 단어가 아닙니다.");
+            var rooms = new Dictionary<GridPos, int>();
+            var records = new List<RoomRecord>(parts.Rooms.Count);
+            foreach (var kv in parts.Rooms)
+            {
+                if (kv.Value < 0) throw new ArgumentException($"{kv.Key}의 단어 번호가 올바르지 않습니다.");
+                if (rooms.ContainsKey(kv.Key)) throw new ArgumentException($"{kv.Key}에 방이 두 번 있습니다.");
+                rooms.Add(kv.Key, kv.Value);
+                records.Add(new RoomRecord(kv.Key, kv.Value, null));
+            }
+            var prepared = Distinct(parts.Prepared, rooms, "주변 준비");
+            var team = Distinct(parts.TeamVisited, rooms, "팀 방문");
+            var doors = new HashSet<RoomConnection>();
+            foreach (var d in parts.OpenDoors ?? new List<RoomConnection>())
+            {
+                if (!rooms.ContainsKey(d.A) || !rooms.ContainsKey(d.B)) throw new ArgumentException($"열린 문 {d}의 방이 없습니다.");
+                if (!doors.Add(d)) throw new ArgumentException($"열린 문 {d}이 두 번 있습니다.");
+            }
+            if (parts.Players == null || parts.Players.Count == 0) throw new ArgumentException("플레이어가 없습니다.");
+            var ids = new HashSet<string>();
+            var teamSet = new HashSet<GridPos>(team);
+            var players = new List<PlayerCopy>(parts.Players.Count);
+            foreach (var p in parts.Players)
+            {
+                if (p == null || string.IsNullOrEmpty(p.Id) || !ids.Add(p.Id)) throw new ArgumentException("플레이어 ID가 비어 있거나 중복됩니다.");
+                if (!rooms.ContainsKey(p.Position)) throw new ArgumentException($"{p.Id}의 위치 {p.Position}에 방이 없습니다.");
+                if (p.Moves < 0) throw new ArgumentException($"{p.Id}의 이동 수가 올바르지 않습니다.");
+                var visited = new HashSet<GridPos>();
+                foreach (var v in p.Visits ?? new List<KeyValuePair<GridPos, int>>())
+                {
+                    if (v.Value < 1 || !rooms.ContainsKey(v.Key) || !visited.Add(v.Key)) throw new ArgumentException($"{p.Id}의 방문 기록 {v.Key}가 올바르지 않습니다.");
+                    if (!teamSet.Contains(v.Key)) throw new ArgumentException($"{p.Id}의 방문 {v.Key}가 팀 방문에 없습니다.");
+                }
+                if (!visited.Contains(p.Position)) throw new ArgumentException($"{p.Id}의 현재 방이 방문 기록에 없습니다.");
+                if (p.Path == null || p.Path.Count == 0 || p.Path[p.Path.Count - 1] != p.Position || p.Path.Any(q => !rooms.ContainsKey(q)))
+                    throw new ArgumentException($"{p.Id}의 경로가 올바르지 않습니다.");
+                players.Add(new PlayerCopy(p));
+            }
+            var c = new SessionCopy
+            {
+                SessionId = parts.SessionId,
+                Mode = parts.Mode,
+                Revision = parts.Revision,
+                StartWord = parts.StartWord,
+                TargetWord = parts.TargetWord,
+                Seed = parts.Seed,
+                PackageId = parts.PackageId,
+                Started = true,
+                Status = parts.Status,
+                PlayStartedAt = double.NaN,
+                Rooms = records.AsReadOnly(),
+                Prepared = Array.AsReadOnly(prepared.OrderBy(p => p).ToArray()),
+                Unfilled = Array.AsReadOnly(new UnfilledCopy[0]),
+                Recent = Array.AsReadOnly(new int[0]),
+                TeamVisited = Array.AsReadOnly(team.OrderBy(p => p).ToArray()),
+                OpenDoors = Array.AsReadOnly(doors.OrderBy(d => d).ToArray()),
+                Players = players.AsReadOnly(),
+            };
+            c.Index();
+            return c;
+        }
+
+        static List<GridPos> Distinct(List<GridPos> list, Dictionary<GridPos, int> rooms, string what)
+        {
+            var seen = new HashSet<GridPos>();
+            foreach (var p in list ?? new List<GridPos>())
+                if (!rooms.ContainsKey(p) || !seen.Add(p)) throw new ArgumentException($"{what} 좌표 {p}가 올바르지 않습니다.");
+            return seen.ToList();
+        }
     }
 }

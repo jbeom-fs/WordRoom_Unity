@@ -171,13 +171,19 @@ namespace WordRoom.Game
             list.SetActive(false);
         }
 
-        /// <summary>Ends this game: loading the main menu destroys the session (map, doors, running work is cancelled).</summary>
+        /// <summary>
+        /// Ends this game: loading the main menu destroys the session (map, doors, running work is cancelled). In a coop
+        /// game this is this player's own leave: the coop room is left (the connection ended only when the coop session
+        /// owns it), and a host leaving before the common start stops the start for the others first.
+        /// </summary>
         void ToMainMenu()
         {
             if (leaving) return;
             leaving = true;
             foreach (var b in lockable) b.interactable = false;
             if (settings.IsOpen) settings.Close();
+            var coop = WordRoom.Network.CoopSession.Current;
+            if (coop != null) coop.LeaveGame();
             SceneManager.LoadScene(mainMenuScene);
         }
 

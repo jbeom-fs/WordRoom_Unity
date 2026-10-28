@@ -164,7 +164,7 @@ namespace WordRoom.RoomDebug
         }
 
         /// <summary>A placed, connected, active player in a running or finished experiment that is not stopped: a map can be used.</summary>
-        public bool CanShowMap => halt == null && session != null && controlled != null && controlled == player && controlled.Placed;
+        public bool CanShowMap => halt == null && (session != null || coopView != null) && controlled != null && controlled == player && controlled.Placed;
 
         /// <summary>The connected player when its component and object are active; null = arrow-key/camera debug.</summary>
         FirstPersonPlayer ActivePlayer => player != null && player.isActiveAndEnabled ? player : null;
@@ -250,7 +250,7 @@ namespace WordRoom.RoomDebug
         {
             if (s.State == DataLoadState.Failed)
                 Debug.LogError($"[방 생성] 데이터 로딩 실패로 실험을 시작할 수 없습니다: {s.Error?.Message}");
-            else if (s.State == DataLoadState.Ready && startWhenDataReady && session == null && !busy)
+            else if (s.State == DataLoadState.Ready && startWhenDataReady && session == null && !busy && !coopMode)
                 StartExperiment();
         }
 
@@ -326,6 +326,11 @@ namespace WordRoom.RoomDebug
         bool CanStart(out WordRoomDataset d)
         {
             d = null;
+            if (coopMode)
+            {
+                Debug.LogWarning("[방 생성] 협동 게임 중에는 단독 실험·게임을 시작하지 않습니다.");
+                return false;
+            }
             if (busy)
             {
                 Debug.Log("[방 생성] 생성 중이라 새 실험을 시작하지 않습니다.");
@@ -436,6 +441,12 @@ namespace WordRoom.RoomDebug
             RefreshHud();
             RefreshRadiusIfChanged();
             var direction = ReadDirection();
+            if (coopMode)                                                  // coop: no arrow-key Move, no door, no entry (see the coop section)
+            {
+                if (ActivePlayer != null) UpdatePlay();
+                else SetHint(HaltHint ?? coopHint);
+                return;
+            }
             if (ActivePlayer != null)
             {
                 if (direction != null)
@@ -479,6 +490,7 @@ namespace WordRoom.RoomDebug
 
         async void Move(Direction direction)
         {
+            if (coopMode) return;                                          // never in coop (single-player request path)
             busy = true;
             var token = cts.Token;
             var s = session;
@@ -520,7 +532,7 @@ namespace WordRoom.RoomDebug
         /// </summary>
         void RefreshRadiusIfChanged()
         {
-            if (busy || session == null || worldView == null || halt != null || shownRadius < 0) return;
+            if (busy || (session == null && coopView == null) || worldView == null || halt != null || shownRadius < 0) return;
             var radius = GameSettings.DisplayRadius;
             if (radius != shownRadius) RefreshView(radius);
         }
@@ -533,6 +545,11 @@ namespace WordRoom.RoomDebug
         /// </summary>
         async void RefreshView(int radius)
         {
+            if (coopMode)
+            {
+                RefreshCoopView(radius);
+                return;
+            }
             busy = true;
             var token = cts.Token;
             var s = session;
@@ -595,6 +612,11 @@ namespace WordRoom.RoomDebug
                 SetHint(HaltHint);
                 return;
             }
+            if (coopMode)
+            {
+                UpdateCoopPlay();
+                return;
+            }
             if (busy)
             {
                 SetHint(null);                // start or entry request running: no caption, no "not placed"
@@ -633,6 +655,7 @@ namespace WordRoom.RoomDebug
         /// </summary>
         async void PrepareRoom(Direction side)
         {
+            if (coopMode) return;                                          // never in coop (single-player request path)
             var p = controlled;
             p.SetMovementLocked(true);
             busy = true;
@@ -687,6 +710,7 @@ namespace WordRoom.RoomDebug
         void LateUpdate()
         {
             StartPlayClock();                                                      // after every Update: the player's cursor/focus handling of this frame is done
+            if (coopMode) return;                                                  // coop: entries wait for the network step (no Enter here)
             if (controlled == null || busy || halt != null || status != "running" || worldView == null) return;
             if (controlled != player || !controlled.Placed) return;                // TrackPlayer releases it next frame
             var to = controlled.transform.position;
@@ -709,6 +733,7 @@ namespace WordRoom.RoomDebug
         /// </summary>
         async void EnterRoom(Direction side)
         {
+            if (coopMode) return;                                                  // never in coop (single-player request path)
             var crossedAt = Time.realtimeSinceStartupAsDouble;                     // end of the play time if this entry reaches the goal
             var p = controlled;
             p.SetMovementLocked(true);
@@ -983,7 +1008,7 @@ namespace WordRoom.RoomDebug
         /// </summary>
         void StartPlayClock()
         {
-            if (session == null || controlled == null || halt != null || session.PlayClockStarted) return;
+            if (coopMode || session == null || controlled == null || halt != null || session.PlayClockStarted) return;   // coop: the common start is the time base
             if (controlled == player && controlled.CanTakeInput) session.StartPlayClock(Time.realtimeSinceStartupAsDouble);
         }
 
@@ -1097,6 +1122,206 @@ namespace WordRoom.RoomDebug
             {
                 Debug.LogError($"[3D 방] 표시 갱신 실패(단어 생성은 계속): {e}");
                 return false;
+            }
+        }
+
+        // ---- coop (initial state confirmed by the host; doors and entries wait for the network step) -------------
+        // Coop mode is entered by the game's coop flow only. Every device shows the same host-confirmed initial copy
+        // (SessionCopy restored from the host's message, the host's own included); only the host holds a coordinator
+        // (the authority, not used for display). The single-player paths — StartGame/StartExperiment, arrow-key Move,
+        // Prepare (E) and Enter (walking through) — never run in coop mode. The player waits placed with walking locked
+        // until the common start, then may walk and look inside the start room and use the map; doors stay closed.
+        bool coopMode;
+        SessionCopy coopView;                // the confirmed initial state this device shows (independent copy)
+        string coopHint;                     // the coop flow's message on screen; null = none
+        bool coopWaiting;                    // placed, waiting for the common start: walking locked by the coop gate
+        string localPlayer = LocalPlayer;    // coop: this device's PlayerId (actor-N); single play: "local"
+
+        public bool IsCoop => coopMode;
+
+        /// <summary>
+        /// Enters coop mode for this scene (before anything is shown): no single-player start, the previous state and
+        /// view are dropped, the player is suspended (no walking or falling) until it is placed.
+        /// </summary>
+        public void BeginCoop(WordRoomDataset d, string localPlayerId)
+        {
+            cts?.Cancel();
+            cts = new CancellationTokenSource();
+            coopMode = true;
+            coopView = null;
+            coopWaiting = false;
+            dataset = d;
+            localPlayer = localPlayerId;
+            session = null;
+            if (controlled != null) controlled.Suspend();
+            if (player != null) player.Suspend();
+            controlled = null;
+            status = null;
+            halt = null;
+            goalReported = false;
+            SuppressGoalHint = false;
+            nextRequest = 0;
+            expectedRoom = GridPos.Origin;
+            exploredMap.Reset(null, localPlayer);
+            mapResync = false;
+            Raise(ExperimentStarted);
+            shownRadius = -1;
+            SetHudWords(null, null);
+            if (worldView != null) ViewCall(() => worldView.BeginSession());
+        }
+
+        /// <summary>The coop flow's message (loading, waiting, failures); null clears it. A stop reason (Halt) wins.</summary>
+        public void SetCoopHint(string text) => coopHint = text;
+
+        /// <summary>
+        /// Host only: the coop coordinator with the fixed participants (in their fixed order) is made and started once on
+        /// the worker; `done` gets the confirmed initial state copied inside that start (world, players and session of
+        /// one revision) and the fixed generation settings, or a failure. Nothing is shown here — the host shows the
+        /// state it sends, through the same checks as everyone.
+        /// </summary>
+        public async void StartCoopHost(int startRank, int targetRank, long seed, int vocabularyLimit, string[] playerIds, Action<SessionCopy, GenerationConfig, string> done)
+        {
+            if (!coopMode || busy || session != null || dataset == null)
+            {
+                done(null, null, "초기 방을 만들 수 있는 상태가 아닙니다");
+                return;
+            }
+            busy = true;
+            var token = cts.Token;
+            var d = dataset;
+            var config = BuildConfig(d);                                   // this device (the host) fixes the settings once
+            config.Seed = seed;
+            config.VocabularyLimit = vocabularyLimit;
+            config.MinWordLength = 1;
+            config.MaxWordLength = 8;
+            config.UseMoveLimit = false;
+            config.Source = "데이터 패키지 settings.json + 호스트 Inspector(목표 유도) + 협동 난이도(어휘 범위)·호스트 자동 선택(시작·목표·시드)";
+            try
+            {
+                var (created, copy) = await Task.Run(() =>
+                {
+                    var c = SessionCoordinator.Create(d, config, startRank, targetRank, SessionMode.Coop, playerIds, token);
+                    var r = c.Start((reader, u) => reader.CopyAll(), token);   // the copy belongs to the start's revision
+                    if (!r.Accepted) throw new InvalidOperationException(r.Refusal);
+                    return (c, r.Captured);
+                }, token);
+                if (this == null || token.IsCancellationRequested || !coopMode) return;
+                session = created;                                         // the authority (exploration requests come with the network step)
+                done(copy, created.Config, null);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+            }
+            catch (ArgumentException e)
+            {
+                if (this != null && !token.IsCancellationRequested) done(null, null, $"게임을 시작할 수 없습니다 — {e.Message}");
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                if (this != null && !token.IsCancellationRequested) done(null, null, "초기 방을 만드는 중 오류가 났습니다");
+            }
+            finally
+            {
+                busy = false;
+            }
+        }
+
+        /// <summary>
+        /// Shows the confirmed initial state (already checked by the coop flow) around this device's player: the 3D
+        /// rooms, doors and passage blocks, the whole map, the HUD words, and the player on the start room's floor.
+        /// True only when every part is shown, the player is placed and stands on that floor; walking then stays
+        /// locked until BeginCoopPlay. False with the reason otherwise (play stops; nothing is retried).
+        /// </summary>
+        public bool ShowCoopInitial(SessionCopy copy, out string failure)
+        {
+            failure = null;
+            if (!coopMode || copy == null || dataset == null || coopView != null)
+            {
+                failure = "협동 화면을 준비할 수 있는 상태가 아닙니다";
+                return false;
+            }
+            coopView = copy;
+            status = copy.Status;
+            exploredMap.Reset(copy.SessionId, localPlayer);
+            if (TrackExploredMap) ApplyMap(MapUpdate.FromCopy(copy, dataset.GetWord));
+            var radius = GameSettings.DisplayRadius;
+            RoomViewSnapshot snapshot;
+            try
+            {
+                snapshot = RoomViewSnapshot.Capture(copy, localPlayer, dataset.GetWord, radius);
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                failure = "방 표시 정보를 만들지 못했습니다";
+                ReportFatal(failure);
+                return false;
+            }
+            var shown = ShowView(snapshot, out var showFailure);
+            if (shown) shownRadius = radius;
+            failure = PlacePlayer(snapshot, shown, showFailure);
+            if (failure == null && controlled == null) failure = "1인칭 플레이어가 연결되지 않아 배치할 수 없습니다";
+            if (failure == null && (!worldView.TryGetShownRoom(snapshot.Center, out var room) || !controlled.IsOnFloorOf(room, out failure)))
+                failure = failure ?? $"시작 방 {snapshot.Center}이 표시되지 않았습니다";
+            if (failure != null)
+            {
+                ReportFatal($"협동 시작 준비 실패 — {failure}");
+                return false;
+            }
+            coopWaiting = true;
+            controlled.SetMovementLocked(true);                            // the coop gate: look yes, walking and doors not yet
+            lastPosition = controlled.transform.position;
+            SetHudWords(snapshot.CurrentWord, snapshot.TargetWord);
+            return true;
+        }
+
+        /// <summary>
+        /// The common start: walking resumes (start room only — doors stay shut) and, on the host, the session's one
+        /// time base is set to `localStartRealtime`, the common server-time start converted to this device's clock
+        /// (never the moment this device became controllable).
+        /// </summary>
+        public void BeginCoopPlay(double localStartRealtime)
+        {
+            if (!coopMode || coopView == null || !coopWaiting) return;
+            coopWaiting = false;
+            if (controlled != null && halt == null) controlled.SetMovementLocked(status != "running");
+            if (session != null) session.StartPlayClock(localStartRealtime);
+        }
+
+        /// <summary>Coop play cannot go on on this device (connection ended, start failed): stops with the reason on screen.</summary>
+        public void HaltCoop(string reason)
+        {
+            if (halt != null) return;
+            if (controlled != null) Halt(reason);
+            else ReportFatal(reason);
+        }
+
+        void UpdateCoopPlay()
+        {
+            var text = coopHint;
+            if (text == null && controlled != null && !coopWaiting && worldView != null && controlled.CanInteract &&
+                controlled.TryGetAimedDoor(DoorReach, out var door) && worldView.CanOpen(door, out _))
+                text = "협동에서는 아직 문을 열 수 없습니다";               // no Prepare in coop at this stage
+            SetHint(text);
+        }
+
+        /// <summary>A display radius change in coop: the same confirmed copy captured again (nothing generated).</summary>
+        void RefreshCoopView(int radius)
+        {
+            if (coopView == null) return;
+            try
+            {
+                var snapshot = RoomViewSnapshot.Capture(coopView, localPlayer, dataset.GetWord, radius);
+                if (ShowView(snapshot, out var failure)) shownRadius = radius;
+                else if (controlled != null) Halt($"표시 거리 변경 후 방 표시 준비 실패 — {failure}");
+                else shownRadius = radius;
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                if (controlled != null) Halt("표시 거리 변경 중 오류가 났습니다(Console 확인)");
+                else shownRadius = radius;
             }
         }
 
