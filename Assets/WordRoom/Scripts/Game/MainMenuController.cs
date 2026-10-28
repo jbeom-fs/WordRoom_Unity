@@ -15,6 +15,8 @@ namespace WordRoom.Game
     /// to Gameplay (GameLaunch) and loads it by scene name; all buttons lock at the first press, so repeated
     /// clicks cannot start twice. Escape goes back one screen. The cursor is free here. Nothing of the word data
     /// or the generator runs in this scene; the room behind the menu is a static prefab instance.
+    /// Optional 협동 (when its button and CoopLobbyScreen are connected): opens the coop lobby over the menu; the main
+    /// panel comes back when it closes, and Escape is left to it while it is open. Single play is not changed by it.
     /// The panels, buttons and the settings panel are the scene's MainMenu Canvas (a prefab instance saved in the
     /// scene); this component only switches them and handles their clicks. Listeners are added once in Awake.
     /// Missing references are reported once and the menu then does nothing (the cursor is still released).
@@ -35,6 +37,12 @@ namespace WordRoom.Game
         [SerializeField] Button startButton;
         [SerializeField] Button settingsButton;
         [SerializeField] Button quitButton;
+
+        [Header("협동 (선택 — WordRoom/협동 로비 구성으로 연결)")]
+        [Tooltip("메인 화면의 협동 버튼. 비우면 협동 진입 없이 기존 메뉴만 동작합니다.")]
+        [SerializeField] Button coopButton;
+        [Tooltip("협동 로비 화면. 협동 버튼이 있으면 필요합니다.")]
+        [SerializeField] CoopLobbyScreen coop;
 
         [Header("난이도")]
         [Tooltip("쉬움·보통·어려움 순서")]
@@ -67,6 +75,20 @@ namespace WordRoom.Game
             for (var i = 0; i < difficultyButtons.Length; i++) normalColors[i] = difficultyButtons[i].colors.normalColor;
             lockable = new[] { startButton, settingsButton, quitButton, difficultyButtons[0], difficultyButtons[1], difficultyButtons[2], backButton, startGameButton };
 
+            if (coopButton != null)
+            {
+                if (coop != null)
+                {
+                    lockable = new List<Button>(lockable) { coopButton }.ToArray();
+                    ArchiveUi.Bind(bindings, coopButton, ShowCoop);
+                    coop.Closed += ShowMain;
+                }
+                else
+                {
+                    coopButton.interactable = false;                   // nothing to open: never a dead click
+                    Debug.LogWarning("[메뉴] 협동 버튼은 있지만 CoopLobbyScreen이 연결되지 않아 비활성으로 둡니다. WordRoom/협동 로비 구성 메뉴로 연결하세요.", this);
+                }
+            }
             ArchiveUi.Bind(bindings, startButton, ShowDifficulty);
             ArchiveUi.Bind(bindings, settingsButton, ShowSettings);
             ArchiveUi.Bind(bindings, quitButton, ArchiveUi.QuitGame);
@@ -103,6 +125,7 @@ namespace WordRoom.Game
         {
             ArchiveUi.Unbind(bindings);
             if (ready && settings != null) settings.Closed -= ShowMain;
+            if (ready && coopButton != null && coop != null) coop.Closed -= ShowMain;
         }
 
         void Start()
@@ -117,6 +140,7 @@ namespace WordRoom.Game
         {
             var kb = Keyboard.current;
             if (!ready || loading || kb == null || !kb.escapeKey.wasPressedThisFrame) return;
+            if (coop != null && coop.IsOpen) return;                    // the coop screen handles its own Escape (one action per press)
             if (settings.IsOpen) settings.Close();
             else if (difficultyPanel.activeSelf) ShowMain();
         }
@@ -142,6 +166,14 @@ namespace WordRoom.Game
             difficultyPanel.SetActive(true);
             if (message.text.Length > 0) message.text = "";
             ArchiveUi.Select(startGameButton.gameObject);
+        }
+
+        /// <summary>The coop lobby over the menu room; the main panel comes back when it closes. The single-player flow is untouched.</summary>
+        void ShowCoop()
+        {
+            if (loading || !coop.Open()) return;                       // incomplete coop UI (reported): stay on the main screen
+            mainPanel.SetActive(false);
+            difficultyPanel.SetActive(false);
         }
 
         void ShowSettings()

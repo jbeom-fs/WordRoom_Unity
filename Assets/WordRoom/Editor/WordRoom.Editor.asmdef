@@ -10,6 +10,9 @@
         "WordRoom.World",
         "WordRoom.Game",
         "WordRoom.Settings",
+        "WordRoom.Network",
+        "PhotonRealtime",
+        "PhotonUnityNetworking",
         "Unity.TextMeshPro",
         "UnityEngine.UI",
         "Unity.InputSystem"

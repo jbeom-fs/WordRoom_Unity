@@ -21,7 +21,7 @@ namespace WordRoom.EditorTools
     /// references of a prefab (SettingsPanel) are connected here; scene components are connected by GameMenuSetup.
     /// Names given here are the paths GameMenuSetup uses to connect scene references.
     /// </summary>
-    public static class ArchiveUiBuilder
+    public static partial class ArchiveUiBuilder
     {
         public const string PrefabFolder = "Assets/Prefabs/UI";
         public const string SettingsPrefabPath = PrefabFolder + "/SettingsPanel.prefab";
@@ -134,7 +134,7 @@ namespace WordRoom.EditorTools
             return r.gameObject;
         }
 
-        /// <summary>Main menu canvas (order 100): Main, Difficulty (inactive) and a hidden SettingsPanel instance.</summary>
+        /// <summary>Main menu canvas (order 100): Main (시작 · 협동 · 설정 · 종료), Difficulty (inactive) and a hidden SettingsPanel instance.</summary>
         public static GameObject BuildMainMenuCanvas(GameObject settingsPrefab)
         {
             var root = CanvasRoot("MainMenu Canvas", MainMenuOrder, true);
@@ -145,6 +145,7 @@ namespace WordRoom.EditorTools
             var title = AddText(main, "Title", "WordRoom", 84f, ArchiveUi.Ivory, TextAlignmentOptions.Center);
             Size(title.gameObject, 424f, 120f);
             AddButton(main, "StartButton", "시작", 360f, 68f, 28f);
+            AddCoopButton(main);
             AddButton(main, "SettingsButton", "설정", 360f, 68f, 28f);
             AddButton(main, "QuitButton", "종료", 360f, 68f, 28f);
 

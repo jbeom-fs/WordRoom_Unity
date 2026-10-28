@@ -29,6 +29,9 @@ namespace WordRoom.Game
         public static readonly Color32 IvoryDim = new Color32(0xD8, 0xD0, 0xBF, 255);        // #D8D0BF
         public static readonly Color32 Track = new Color32(0x2B, 0x1F, 0x18, 255);
         public static readonly Color32 Dim = new Color32(0, 0, 0, 150);
+        public static readonly Color32 Well = new Color32(0x21, 0x1A, 0x16, 255);            // #211A16 inside of lists and input fields
+        public static readonly Color32 Success = new Color32(0x7D, 0xA5, 0x8D, 255);         // #7DA58D ready / can join (badges, short texts)
+        public static readonly Color32 Error = new Color32(0xE3, 0xA0, 0x8C, 255);           // #E3A08C failure and error notices
 
         public static void Select(GameObject go)
         {

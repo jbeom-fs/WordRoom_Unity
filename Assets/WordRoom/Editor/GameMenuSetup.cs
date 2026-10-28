@@ -42,7 +42,7 @@ namespace WordRoom.EditorTools
     /// cameras and the player are not touched. Only scenes with a change are saved (warnings alone save nothing);
     /// the log lists every saved asset, also when it stops early. The scene open before is reopened.
     /// </summary>
-    public static class GameMenuSetup
+    public static partial class GameMenuSetup
     {
         const string DevScenePath = "Assets/WordRoom/Scenes/RoomGenerationDebug.unity";
         const string MainMenuPath = "Assets/WordRoom/Scenes/MainMenu.unity";
@@ -143,6 +143,7 @@ namespace WordRoom.EditorTools
                 SetupGameplay(ui, notes, saved);
                 SetupDevScene(ui, notes, saved);
                 SetupMainMenu(room, ui, notes, saved);
+                SetupCoop(notes, saved);                                 // 협동 button and lobby of the MainMenu scene (see GameMenuSetup.Coop)
                 SetupBuildScenes(notes, saved);
             });
         }
