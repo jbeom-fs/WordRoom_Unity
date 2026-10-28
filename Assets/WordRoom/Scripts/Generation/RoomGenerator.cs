@@ -10,13 +10,33 @@ using WordRoom.Data;
 namespace WordRoom.Generation
 {
     /// <summary>
-    /// Port of kw_semantic_engine.Simulation 1.1.0 (generation and moves, without the automatic player).
-    /// Rooms are surfaces; every neighbor needs its own directly approved sense pair (B rule, no transitivity).
-    /// The empty neighbors of one room (the one moved into, or with Prepare the one behind an opened door, before
-    /// Enter moves into it) are planned together: relation DB with the threshold
-    /// ladder (backtracking within placement_budget per step), then the fastText supplement. Committed rooms never
-    /// change. Requests are serialized; all reads come from WordRoomDataset (no second data load).
-    /// Python names are given in the comments of each method.
+    /// What one fill is computed with, decided by SessionCoordinator: the room whose empty neighbors are filled and
+    /// the guidance progress recorded when the request is processed (solo: the configured GuidanceBasis of the
+    /// requesting player; coop: the team's distinct visited coordinates). Never a player's position.
+    /// </summary>
+    internal readonly struct GenerationContext
+    {
+        public readonly GridPos Center;
+        public readonly int GuidanceProgress;
+        public readonly CancellationToken Cancel;
+
+        public GenerationContext(GridPos center, int guidanceProgress, CancellationToken cancel)
+        {
+            Center = center;
+            GuidanceProgress = guidanceProgress;
+            Cancel = cancel;
+        }
+    }
+
+    /// <summary>
+    /// Port of kw_semantic_engine.Simulation 1.1.0 — the generation part only (fill and its planning; the automatic
+    /// player, moves, visits and the target arrival are SessionCoordinator's). Rooms are surfaces; every neighbor
+    /// needs its own directly approved sense pair (B rule, no transitivity). The empty neighbors of one explicitly
+    /// given center are planned together: relation DB with the threshold ladder (backtracking within
+    /// placement_budget per step), then the fastText supplement. Committed rooms never change. The generator keeps
+    /// no world of its own: each Fill works on the session's shared RoomMap passed in by the coordinator, which
+    /// serializes the requests (the lock here only guards the generator's caches). All reads come from
+    /// WordRoomDataset (no second data load). Python names are given in the comments of each method.
     /// </summary>
     public sealed class RoomGenerator
     {
@@ -30,6 +50,7 @@ namespace WordRoom.Generation
         readonly bool[] allowedMask;
         readonly bool[] restricted;
         readonly double[] closeness;
+        readonly int target;
         readonly object gate = new object();
         readonly Dictionary<(int, int, double), (int i, int j, double s)> evidenceCache = new Dictionary<(int, int, double), (int, int, double)>();
         readonly Dictionary<int, float[]> ftSimsCache = new Dictionary<int, float[]>();
@@ -37,26 +58,27 @@ namespace WordRoom.Generation
         readonly Dictionary<int, HashSet<int>> rejectedCache = new Dictionary<int, HashSet<int>>();
         Dictionary<long, float> noveltyCache = new Dictionary<long, float>();
         CancellationToken cancel;
+        RoomMap world;                   // the world of the running Fill (set and cleared inside the lock)
+        double guidance;                 // guidance strength of the running Fill (from its context)
 
-        public RoomMap Map { get; }
         public GenerationConfig Config => cfg;
         public IReadOnlyList<double> Ladder => ladder;
         public VocabularyScope Scope { get; }
         public WordRoomDataset Data => d;
-        public bool Started { get; private set; }
+        public int Target => target;
 
-        RoomGenerator(WordRoomDataset data, GenerationConfig config, VocabularyScope scope, int start, int target, double[] closeness, bool[] restricted)
+        RoomGenerator(WordRoomDataset data, GenerationConfig config, VocabularyScope scope, int target, double[] closeness, bool[] restricted)
         {
             d = data;
             rel = data.Relations;
             cfg = config;
             Scope = scope;
+            this.target = target;
             ladder = config.ThresholdLadder(data);
             allowedMask = new bool[data.WordCount];
             foreach (var w in scope.Ranks) allowedMask[w] = true;
             this.restricted = restricted;
             this.closeness = closeness;
-            Map = new RoomMap(start, target, config.RecentWindow);
         }
 
         /// <summary>
@@ -78,160 +100,43 @@ namespace WordRoom.Generation
             var allowed = new bool[data.WordCount];
             foreach (var w in scope.Ranks) allowed[w] = true;
             var close = cfg.TargetGuidance ? TargetCloseness.Compute(data, target, restricted, allowed, cancel) : null;
-            return new RoomGenerator(data, cfg, scope, start, target, close, restricted);
+            return new RoomGenerator(data, cfg, scope, target, close, restricted);
         }
 
-        // ---- requests (serialized) ------------------------------------------------------------------------
-        /// <summary>Simulation.reserve: fill the start room's neighbors. Call once.</summary>
-        public GenerationUpdate Start(CancellationToken token = default)
-        {
-            lock (gate)
-            {
-                if (Started) throw new InvalidOperationException("이미 시작한 실험입니다.");
-                cancel = token;
-                Started = true;
-                var update = new GenerationUpdate { Kind = "start", From = Map.Position, To = Map.Position, Moved = false, FirstVisit = true };
-                update.Fill = Fill(Map.Position);
-                if (!HasAnyDoor(Map.Position))
-                {
-                    Map.Status = "no_exit";
-                    Map.FailureReason = "시작 방 주변에 생성된 방이 하나도 없어 이동할 수 없습니다. " + Describe(update.Fill);
-                }
-                Finish(update);
-                return update;
-            }
-        }
-
+        // ---- fill request (called by SessionCoordinator inside its request) -------------------------------
         /// <summary>
-        /// Simulation.step(destination): move into an existing adjacent room, then fill its empty neighbors.
-        /// A failed fill never undoes the move or an arrival. Returns null when the move is not possible (reason).
+        /// Simulation.fill around ctx.Center on `map`: commits rooms only on its empty neighbors (committed rooms and
+        /// their creation order are never touched), updates the world's recent generated words, unfilled records
+        /// and marks the center prepared. No position, move, visit or session status changes here. The returned
+        /// report holds copies of the committed rooms.
         /// </summary>
-        public GenerationUpdate Move(Direction direction, out string refusal, CancellationToken token = default)
+        internal FillReport Fill(RoomMap map, GenerationContext ctx)
         {
             lock (gate)
             {
-                cancel = token;
-                refusal = null;
-                if (!Started)
+                world = map;
+                cancel = ctx.Cancel;
+                guidance = Guidance(ctx.GuidanceProgress);
+                try
                 {
-                    refusal = "실험이 아직 시작되지 않았습니다.";
-                    return null;
+                    var report = FillAround(ctx.Center);
+                    world.MarkPrepared(ctx.Center);
+                    return report;
                 }
-                if (Map.Status != "running")
+                finally
                 {
-                    refusal = $"실험이 끝났습니다 ({StatusText.Korean(Map.Status)}).";
-                    return null;
+                    world = null;
                 }
-                if (!HasAnyDoor(Map.Position))
-                {
-                    Map.Status = "no_exit";
-                    Map.FailureReason = "현재 방에 생성된 인접 방이 없습니다.";
-                    refusal = Map.FailureReason;
-                    return null;
-                }
-                var dest = Map.Position.Add(Directions.Offset(direction));
-                if (!Map.TryGetWord(dest, out var word))
-                {
-                    refusal = $"{Directions.Korean(direction)} 방향 {dest}은 미생성 좌표라 이동할 수 없습니다." +
-                              (Map.IsUnfilled(Map.Position) ? " (이 방의 주변 생성이 완성되지 못한 위치)" : "");
-                    return null;
-                }
-                var update = EnterRoom(dest, word, "move");
-                update.Fill = Fill(dest);       // also for the target room (1.1.0: arrival is kept, neighbors filled anyway)
-                Finish(update);
-                return update;
             }
-        }
-
-        /// <summary>
-        /// Fills the empty neighbors of the existing room adjacent on `direction` (opening its door), with the same
-        /// Fill as a move, without entering it: position, moves, visits, path and status stay as they are, so the
-        /// guidance progress is the recorded one. Newly committed rooms update the recent words as in any fill.
-        /// Afterwards the room counts as prepared (IsPrepared), also when some neighbors stay 미생성 — the report
-        /// tells them apart (Complete, Empty, skipped_same_state). Returns null with the reason when not possible.
-        /// </summary>
-        public GenerationUpdate Prepare(Direction direction, out string refusal, CancellationToken token = default)
-        {
-            lock (gate)
-            {
-                cancel = token;
-                if (!CheckNeighbor(direction, out var dest, out _, out refusal)) return null;
-                var update = new GenerationUpdate { Kind = "prepare", From = Map.Position, To = dest, Moved = false, FirstVisit = !Map.IsVisited(dest) };
-                update.Fill = Fill(dest);
-                Finish(update);
-                return update;
-            }
-        }
-
-        /// <summary>
-        /// Enters the prepared room adjacent on `direction`: the move part of Move (Map.Enter, target arrival, test
-        /// move limit) without filling again — its neighbors were filled when it was prepared. Fill is null in the
-        /// result. Returns null with the reason when not possible, also for a room that was never prepared.
-        /// </summary>
-        public GenerationUpdate Enter(Direction direction, out string refusal, CancellationToken token = default)
-        {
-            lock (gate)
-            {
-                cancel = token;
-                if (!CheckNeighbor(direction, out var dest, out var word, out refusal)) return null;
-                if (!Map.IsPrepared(dest))
-                {
-                    refusal = $"{Directions.Korean(direction)} 방향 {dest}은 주변 준비 전이라 입장할 수 없습니다.";
-                    return null;
-                }
-                var update = EnterRoom(dest, word, "enter");
-                Finish(update);
-                return update;
-            }
-        }
-
-        /// <summary>Started, running and an existing room next to the current one on `direction`.</summary>
-        bool CheckNeighbor(Direction direction, out GridPos dest, out int word, out string refusal)
-        {
-            refusal = null;
-            dest = Map.Position.Add(Directions.Offset(direction));
-            word = -1;
-            if (!Started) refusal = "실험이 아직 시작되지 않았습니다.";
-            else if (Map.Status != "running") refusal = $"실험이 끝났습니다 ({StatusText.Korean(Map.Status)}).";
-            else if (!Map.TryGetWord(dest, out word))
-                refusal = $"{Directions.Korean(direction)} 방향 {dest}은 미생성 좌표라 이동할 수 없습니다." +
-                          (Map.IsUnfilled(Map.Position) ? " (이 방의 주변 생성이 완성되지 못한 위치)" : "");
-            return refusal == null;
-        }
-
-        /// <summary>Simulation.step without the fill: pos, moves, visits, path, then target arrival and the test move limit.</summary>
-        GenerationUpdate EnterRoom(GridPos dest, int word, string kind)
-        {
-            var from = Map.Position;
-            var fresh = Map.Enter(dest);
-            if (word == Map.Target) Map.Status = "success";
-            else if (cfg.UseMoveLimit && Map.Moves >= cfg.MaxMoves) Map.Status = "move_limit";   // test-only; normal play has no limit
-            return new GenerationUpdate { Kind = kind, From = from, To = dest, Moved = true, FirstVisit = fresh };
-        }
-
-        void Finish(GenerationUpdate u)
-        {
-            u.Moves = Map.Moves;
-            u.Status = Map.Status;
-            u.Arrived = Map.Status == "success";
-            u.GuidanceStrength = Guidance();
-        }
-
-        bool HasAnyDoor(GridPos p)
-        {
-            foreach (var q in Directions.Around(p))
-                if (Map.HasRoom(q)) return true;
-            return false;
         }
 
         void CheckCancel() => cancel.ThrowIfCancellationRequested();
 
         // ---- target guidance ------------------------------------------------------------------------------
-        /// <summary>Simulation.guidance: strength until guidance_start, then a linear ramp to guidance_max.</summary>
-        public double Guidance()
+        /// <summary>Simulation.guidance: strength until guidance_start, then a linear ramp to guidance_max, for `progress`.</summary>
+        public double Guidance(int progress)
         {
             if (!cfg.TargetGuidance) return 0.0;
-            var progress = cfg.GuidanceBasis == "unique" ? Map.UniqueVisited : Map.Moves;
             if (progress < cfg.GuidanceStart) return cfg.GuidanceStrength;
             var part = cfg.GuidanceRamp == 0 ? 1.0 : Math.Min(1.0, (double)(progress - cfg.GuidanceStart) / cfg.GuidanceRamp);
             return cfg.GuidanceStrength + (cfg.GuidanceMax - cfg.GuidanceStrength) * part;
@@ -304,7 +209,7 @@ namespace WordRoom.Generation
             var list = new List<(GridPos, int)>(4);
             foreach (var q in Directions.Around(p))
             {
-                if (Map.TryGetWord(q, out var w)) list.Add((q, w));
+                if (world.TryGetWord(q, out var w)) list.Add((q, w));
                 else
                     foreach (var a in assign)
                         if (a.Pos == q)
@@ -325,13 +230,14 @@ namespace WordRoom.Generation
             if (!cfg.AvoidAdjacentRepeat) return banned;
             if (cfg.RepeatScope == "global")
             {
-                foreach (var kv in Map.Rooms()) banned.Add(kv.Value);
+                foreach (var q in world.CreationOrder)
+                    if (world.TryGetWord(q, out var all)) banned.Add(all);
                 return banned;
             }
             var r = cfg.RepeatRadius;
             for (var dx = -r; dx <= r; dx++)
                 for (var dy = -r + Math.Abs(dx); dy <= r - Math.Abs(dx); dy++)
-                    if (Map.TryGetWord(new GridPos(p.X + dx, p.Y + dy), out var w)) banned.Add(w);
+                    if (world.TryGetWord(new GridPos(p.X + dx, p.Y + dy), out var w)) banned.Add(w);
             return banned;
         }
 
@@ -375,9 +281,9 @@ namespace WordRoom.Generation
         /// </summary>
         List<RankedCandidate> Rank(GridPos p, List<int> cands, List<(GridPos q, int w)> nb, List<Assigned> assign, double threshold)
         {
-            var recentWords = new HashSet<int>(Map.Recent);
+            var recentWords = new HashSet<int>(world.Recent);
             foreach (var a in assign) recentWords.Add(a.Word);
-            var g = Guidance();
+            var g = guidance;
             var div = (float)(0.1 * cfg.Diversity);
             var list = new List<RankedCandidate>(cands.Count);
             foreach (var w in cands)
@@ -581,7 +487,7 @@ namespace WordRoom.Generation
             var room = new PlacedRoom
             {
                 Position = a.Pos, Word = a.Word, Stage = "relation_db", Threshold = threshold, Candidates = a.Count, Score = a.Info.Score,
-                GuidanceStrength = Guidance(), GuidanceBonus = a.Info.Bonus,
+                GuidanceStrength = guidance, GuidanceBonus = a.Info.Bonus,
             };
             foreach (var (q, i, j, s) in a.Info.Evidence)
             {
@@ -594,17 +500,20 @@ namespace WordRoom.Generation
             return room;
         }
 
-        /// <summary>Simulation.commit: all planned rooms at once; links keep their own source and evidence.</summary>
+        /// <summary>
+        /// Simulation.commit: all planned rooms at once; links keep their own source and evidence. The world keeps the
+        /// committed object; the report gets a copy.
+        /// </summary>
         void Commit(List<PlacedRoom> rooms, FillReport report)
         {
             foreach (var room in rooms)
             {
-                Map.Commit(room);
+                world.Commit(room);
                 foreach (var l in room.Links)
-                    if (Map.TryGetWord(l.Neighbor, out var nw)) l.NeighborWord = nw;
+                    if (world.TryGetWord(l.Neighbor, out var nw)) l.NeighborWord = nw;
                 room.Relaxed = room.Links.Any(l => l.Relaxed);
                 room.FastText = room.Links.Any(l => l.Source == "fasttext");
-                report.Added.Add(room);
+                report.Added.Add(room.Copy());
             }
         }
 
@@ -686,7 +595,7 @@ namespace WordRoom.Generation
             var summary = new FtSummary { Candidates = idx.Count };
             var list = new List<FtCandidate>(idx.Count);
             if (idx.Count == 0) return (list, summary);
-            var g = Guidance();
+            var g = guidance;
             foreach (var x in idx)
             {
                 var c = new FtCandidate { Word = x, Db = new bool[k], Sims = new float[k], Restricted = new bool[k], StoredNo = new bool[k] };
@@ -731,9 +640,9 @@ namespace WordRoom.Generation
                 return a.Word.CompareTo(b.Word);
             });
             var order = list.GetRange(0, Math.Min(FtTop, list.Count));
-            if (g != 0 && !order.Any(c => c.Word == Map.Target))
+            if (g != 0 && !order.Any(c => c.Word == target))
             {
-                var hit = list.Find(c => c.Word == Map.Target);
+                var hit = list.Find(c => c.Word == target);
                 if (hit != null) order.Add(hit);      // an eligible target is never cut off
             }
             var best = order[0];
@@ -741,7 +650,7 @@ namespace WordRoom.Generation
                 .Take(cfg.SelectionTop).ToList();
             if (cfg.Temperature > 0 && tier.Count > 1)
             {
-                var recent = Map.Recent.Where(d.HasFastText).ToList();
+                var recent = world.Recent.Where(d.HasFastText).ToList();
                 var div = (float)(0.1 * cfg.Diversity);
                 var score = new double[tier.Count];
                 for (var t = 0; t < tier.Count; t++)
@@ -974,32 +883,25 @@ namespace WordRoom.Generation
                 report.Empty.Add(new EmptyPosition { Position = p, Reason = lists[p].Count == 0 ? "no candidate" : "conflict with the other planned rooms" });
         }
 
-        // ---- filling around the current room --------------------------------------------------------------
+        // ---- filling around the given center ---------------------------------------------------------------
         /// <summary>
         /// Simulation.fill: relation DB with the threshold ladder, then the fastText supplement. A failure leaves the
-        /// move in place and is recorded; the same room is retried only after the map has changed (room count).
-        /// A processed request (also partial or skipped) marks the center as prepared.
+        /// request's other changes in place and is recorded; the same room is retried only after the map has changed
+        /// (room count). Fill marks the processed center (also partial or skipped) as prepared.
         /// </summary>
-        FillReport Fill(GridPos center)
-        {
-            var report = FillAround(center);
-            Map.MarkPrepared(center);
-            return report;
-        }
-
         FillReport FillAround(GridPos center)
         {
             var report = new FillReport { Center = center };
-            var needed = Directions.Around(center).Where(q => !Map.HasRoom(q)).ToList();
+            var needed = Directions.Around(center).Where(q => !world.HasRoom(q)).ToList();
             if (needed.Count == 0)
             {
                 report.Complete = true;
                 return report;
             }
-            if (Map.Unfilled.TryGetValue(center, out var previous) && previous.Rooms == Map.RoomCount)
+            if (world.Unfilled.TryGetValue(center, out var previous) && previous.Rooms == world.RoomCount)
             {
                 report.Stage = "skipped_same_state";
-                report.Empty.AddRange(previous.Empty);
+                foreach (var e in previous.Empty) report.Empty.Add(e.Copy());   // the record stays the world's
                 return report;
             }
             var watch = Stopwatch.StartNew();
@@ -1010,7 +912,7 @@ namespace WordRoom.Generation
             {
                 foreach (var a in plan.Assign) placed.Add(DbRoom(a, plan.Threshold));
                 Commit(placed, report);
-                Map.Unfilled.Remove(center);
+                world.Unfilled.Remove(center);
                 report.Stage = "relation_db";
                 report.Threshold = plan.Threshold;
                 report.Complete = true;
@@ -1022,15 +924,15 @@ namespace WordRoom.Generation
             report.Stage = useFt ? "fasttext" : "relation_db_partial";
             PlanFasttext(needed, useFt, report, placed);
             Commit(placed, report);
-            var missing = needed.Where(q => !Map.HasRoom(q)).ToList();
+            var missing = needed.Where(q => !world.HasRoom(q)).ToList();
             report.Complete = missing.Count == 0;
-            if (report.Complete) Map.Unfilled.Remove(center);
-            else Map.Unfilled[center] = new UnfilledRecord { Rooms = Map.RoomCount, Missing = missing, Empty = new List<EmptyPosition>(report.Empty) };
+            if (report.Complete) world.Unfilled.Remove(center);
+            else world.Unfilled[center] = new UnfilledRecord { Rooms = world.RoomCount, Missing = missing, Empty = report.Empty.Select(e => e.Copy()).ToList() };
             report.Seconds = watch.Elapsed.TotalSeconds;
             return report;
         }
 
-        string Describe(FillReport f) =>
+        internal static string Describe(FillReport f) =>
             f.Empty.Count == 0 ? "" : string.Join(" / ", f.Empty.Select(e => $"{e.Position}: {e.Reason}"));
     }
 }

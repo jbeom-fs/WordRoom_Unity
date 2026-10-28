@@ -45,76 +45,98 @@ namespace WordRoom.Data.Tests
         }
     }
 
-    /// <summary>Generator rules on the synthetic fixture (12 surfaces).</summary>
+    /// <summary>Generator rules on the synthetic fixture (12 surfaces), through a solo session.</summary>
     public sealed class RoomGeneratorFixtureTests
     {
+        const string Me = "p";
         static WordRoomDataset data;
+        long nextRequest;
 
-        static WordRoomDataset Data => data ?? (data = WordRoomDataLoader.Load(new DirectoryPackageSource(
+        internal static WordRoomDataset Data => data ?? (data = WordRoomDataLoader.Load(new DirectoryPackageSource(
             Path.Combine(Application.dataPath, "WordRoom", "Tests", "Fixtures~", "Synthetic", PackageFormat.DefaultFolderName))));
 
-        static RoomGenerator NewGenerator(long seed = 42)
+        static SessionCoordinator NewSession(long seed = 42)
         {
             var cfg = GenerationConfig.FromSettings(Data.Settings);
             cfg.Seed = seed;
             Assert.IsTrue(Data.TryGetWordRank("경기", out var start));
             Assert.IsTrue(Data.TryGetWordRank("바다", out var target));
-            return RoomGenerator.Create(Data, cfg, start, target);
+            return SessionCoordinator.CreateSolo(Data, cfg, start, target, Me);
         }
 
-        static List<string> Walk(RoomGenerator g, int steps)
+        /// <summary>Position, status, every room and the rooms added by `u` (read inside the request's capture).</summary>
+        static string Snapshot(SessionReader r, GenerationUpdate u) =>
+            $"{r.PlayerPosition(Me)}|{u.Status}|" + string.Join(";", r.CopyAll().Rooms.Select(kv => $"{kv.Position}={kv.Word}")) + "|" +
+            string.Join(";", u.Added.Select(x => $"{x.Position}:{x.Stage}:{x.Threshold}:{string.Join(",", x.Links.Select(l => $"{l.Source}{l.YesScore}{l.Similarity}"))}"));
+
+        static Direction? FirstExisting(SessionCoordinator c) =>
+            c.Read(r =>
+            {
+                var here = r.PlayerPosition(Me);
+                foreach (var d in Directions.GenerationOrder)
+                    if (r.HasRoom(here.Add(Directions.Offset(d)))) return (Direction?)d;
+                return null;
+            });
+
+        RequestResult<string> Move(SessionCoordinator c, Direction d) =>
+            c.Submit(new SessionRequest(c.SessionId, Me, ++nextRequest, RequestKind.Move, c.Read(r => r.PlayerPosition(Me)), d), Snapshot);
+
+        List<string> Walk(SessionCoordinator c, int steps)
         {
             var log = new List<string>();
-            var u = g.Start();
-            log.Add(Snapshot(g, u));
-            for (var k = 0; k < steps && g.Map.Status == "running"; k++)
+            var s = c.Start(Snapshot);
+            log.Add(s.Captured);
+            for (var k = 0; k < steps && c.Read(r => r.Status) == "running"; k++)
             {
-                var dir = Directions.GenerationOrder.FirstOrDefault(d => g.Map.HasRoom(g.Map.Position.Add(Directions.Offset(d))));
-                var m = g.Move(dir, out var refusal);
-                Assert.IsNotNull(m, refusal);
-                log.Add(Snapshot(g, m));
+                var dir = FirstExisting(c);
+                Assert.IsNotNull(dir);
+                var m = Move(c, dir.Value);
+                Assert.IsTrue(m.Accepted, m.Refusal);
+                log.Add(m.Captured);
             }
             return log;
         }
 
-        static string Snapshot(RoomGenerator g, GenerationUpdate u) =>
-            $"{g.Map.Position}|{u.Status}|" + string.Join(";", g.Map.Rooms().Select(kv => $"{kv.Key}={kv.Value}")) + "|" +
-            string.Join(";", u.Added.Select(r => $"{r.Position}:{r.Stage}:{r.Threshold}:{string.Join(",", r.Links.Select(l => $"{l.Source}{l.YesScore}{l.Similarity}"))}"));
-
         [Test]
         public void SameSeedAndMovesGiveSameMap()
         {
-            CollectionAssert.AreEqual(Walk(NewGenerator(), 4), Walk(NewGenerator(), 4));
+            CollectionAssert.AreEqual(Walk(NewSession(), 4), Walk(NewSession(), 4));
         }
 
         [Test]
         public void RoomsNeverChangeAndRepeatsAreKeptApart()
         {
-            var g = NewGenerator();
-            g.Start();
-            for (var k = 0; k < 4 && g.Map.Status == "running"; k++)
+            var c = NewSession();
+            c.Start<bool>(null);
+            for (var k = 0; k < 4 && c.Read(r => r.Status) == "running"; k++)
             {
-                var before = g.Map.Rooms().ToList();
-                var dir = Directions.GenerationOrder.FirstOrDefault(d => g.Map.HasRoom(g.Map.Position.Add(Directions.Offset(d))));
-                g.Move(dir, out _);
-                foreach (var kv in before)
+                var before = c.Read(r => r.CopyAll().Rooms);
+                var dir = FirstExisting(c);
+                Assert.IsNotNull(dir);
+                Move(c, dir.Value);
+                c.Read(r =>
                 {
-                    Assert.IsTrue(g.Map.TryGetWord(kv.Key, out var w));
-                    Assert.AreEqual(kv.Value, w, $"{kv.Key}의 단어가 바뀜");
-                }
+                    foreach (var kv in before)
+                    {
+                        Assert.IsTrue(r.TryGetWord(kv.Position, out var w));
+                        Assert.AreEqual(kv.Word, w, $"{kv.Position}의 단어가 바뀜");
+                    }
+                    return true;
+                });
             }
-            var rooms = g.Map.Rooms().ToList();
+            var rooms = c.Read(r => r.CopyAll().Rooms);
+            var radius = c.Config.RepeatRadius;
             foreach (var a in rooms)
                 foreach (var b in rooms)
-                    if (a.Key != b.Key && GridPos.Distance(a.Key, b.Key) <= g.Config.RepeatRadius)
-                        Assert.AreNotEqual(a.Value, b.Value, $"{a.Key}와 {b.Key}에 같은 표기");
+                    if (a.Position != b.Position && GridPos.Distance(a.Position, b.Position) <= radius)
+                        Assert.AreNotEqual(a.Word, b.Word, $"{a.Position}와 {b.Position}에 같은 표기");
         }
 
         [Test]
         public void RelationLinksAreApprovedAtTheirThreshold()
         {
-            var g = NewGenerator();
-            var u = g.Start();
+            var c = NewSession();
+            var u = c.Start<bool>(null).Update;
             foreach (var room in u.Added)
                 foreach (var l in room.Links.Where(l => l.Source == "relation_db"))
                     Assert.AreEqual(WordPairState.Approved, Data.Relations.GetWordPairState(room.Word, l.NeighborWord, l.Threshold));
@@ -123,13 +145,14 @@ namespace WordRoom.Data.Tests
         [Test]
         public void UngeneratedDirectionIsRefused()
         {
-            var g = NewGenerator();
-            g.Start();
-            var missing = Directions.GenerationOrder.Where(d => !g.Map.HasRoom(g.Map.Position.Add(Directions.Offset(d)))).ToList();
+            var c = NewSession();
+            c.Start<bool>(null);
+            var missing = c.Read(r => Directions.GenerationOrder.Where(d => !r.HasRoom(Directions.Offset(d))).ToList());
             if (missing.Count == 0) Assert.Ignore("모든 방향이 생성되어 미생성 이동을 시험할 수 없음");
-            Assert.IsNull(g.Move(missing[0], out var refusal));
-            StringAssert.Contains("미생성", refusal);
-            Assert.AreEqual(GridPos.Origin, g.Map.Position);
+            var m = Move(c, missing[0]);
+            Assert.IsFalse(m.Accepted);
+            StringAssert.Contains("미생성", m.Refusal);
+            Assert.AreEqual(GridPos.Origin, c.Read(r => r.PlayerPosition(Me)));
         }
 
         [Test]
@@ -137,10 +160,10 @@ namespace WordRoom.Data.Tests
         {
             var cfg = GenerationConfig.FromSettings(Data.Settings);
             Assert.IsTrue(Data.TryGetWordRank("경기", out var w));
-            Assert.Throws<ArgumentException>(() => RoomGenerator.Create(Data, cfg, w, w));
+            Assert.Throws<ArgumentException>(() => SessionCoordinator.CreateSolo(Data, cfg, w, w, Me));
             cfg.VocabularyLimit = 99999;
             Assert.IsTrue(Data.TryGetWordRank("바다", out var t));
-            Assert.Throws<ArgumentException>(() => RoomGenerator.Create(Data, cfg, w, t));
+            Assert.Throws<ArgumentException>(() => SessionCoordinator.CreateSolo(Data, cfg, w, t, Me));
         }
     }
 }

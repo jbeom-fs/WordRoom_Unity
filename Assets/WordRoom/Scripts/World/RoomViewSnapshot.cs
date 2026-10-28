@@ -5,13 +5,13 @@ using WordRoom.Generation;
 namespace WordRoom.World
 {
     /// <summary>
-    /// What the 3D view needs from the logical map: the rooms that exist in RoomMap within the display radius of
-    /// the current room (Manhattan distance |dx|+|dy| ≤ radius: at most 5, 13 or 25 rooms for 1, 2 or 3), plus, for
-    /// each of these rooms, the words of its four neighbors for the wall signs, and the current and target words
-    /// for the HUD. Captured right after a generator request finished, or for a radius change on an idle map (on
-    /// the worker, before control returns to the main thread), so the main thread never walks RoomMap while a
-    /// request runs. Read-only copy; never generates anything: missing coordinates are simply left out, and
-    /// rooms just outside the radius are only read for their stored words, never shown.
+    /// What one device's 3D view needs from the session: the rooms of the shared world within the display radius of
+    /// the given (local) player's confirmed room (Manhattan distance |dx|+|dy| ≤ radius: at most 5, 13 or 25 rooms
+    /// for 1, 2 or 3), plus, for each of these rooms, the words of its four neighbors for the wall signs, the
+    /// confirmed state of every connection of these rooms, and the current and target words for the HUD.
+    /// Captured inside a SessionCoordinator request or Read (on the worker), so it always belongs to one confirmed
+    /// revision and the main thread never reads the session. Read-only copy; never generates anything: missing
+    /// coordinates are simply left out, and rooms just outside the radius are only read for their stored words.
     /// </summary>
     public sealed class RoomViewSnapshot
     {
@@ -20,6 +20,13 @@ namespace WordRoom.World
         /// <summary>Largest room count a snapshot can hold (radius 3: 2·3² + 2·3 + 1 = 25).</summary>
         public const int MaxRooms = 2 * MaxRadius * MaxRadius + 2 * MaxRadius + 1;
 
+        public string SessionId { get; private set; }
+        public long Revision { get; private set; }
+
+        /// <summary>The player this view follows (the local player of the device).</summary>
+        public string PlayerId { get; private set; }
+
+        /// <summary>That player's confirmed room.</summary>
         public GridPos Center { get; private set; }
         public string Status { get; private set; }
 
@@ -29,11 +36,8 @@ namespace WordRoom.World
         /// <summary>Surface of the current room (Center), copied on the worker for the HUD.</summary>
         public string CurrentWord { get; private set; }
 
-        /// <summary>Surface of the experiment's target (RoomMap.Target, fixed at its start), copied on the worker.</summary>
+        /// <summary>Surface of the session's target (fixed at its start), copied on the worker.</summary>
         public string TargetWord { get; private set; }
-
-        /// <summary>RoomMap.UniqueVisited when captured: distinct rooms entered, start room included (for the goal result).</summary>
-        public int UniqueVisited { get; private set; }
 
         /// <summary>Existing rooms to show: the center first, then by distance, then from 상 to 하 and 좌 to 우 (fixed order).</summary>
         public IReadOnlyList<KeyValuePair<GridPos, int>> Rooms => rooms;
@@ -41,12 +45,16 @@ namespace WordRoom.World
         /// <summary>For each room in Rooms: the stored words of its neighbors, indexed by Direction; null = 미생성.</summary>
         public IReadOnlyDictionary<GridPos, string[]> Signs => signs;
 
-        /// <summary>A room in Rooms whose neighbors' fill request was processed (RoomMap.IsPrepared) when captured.</summary>
+        /// <summary>A room in Rooms whose neighbors' fill request was processed when captured (not: all four exist).</summary>
         public bool IsPrepared(GridPos p) => prepared.Contains(p);
+
+        /// <summary>Confirmed state of a connection of a room in Rooms (Closed for any other connection).</summary>
+        public DoorState Door(RoomConnection id) => openDoors.Contains(id) ? DoorState.Open : DoorState.Closed;
 
         readonly List<KeyValuePair<GridPos, int>> rooms = new List<KeyValuePair<GridPos, int>>(MaxRooms);
         readonly Dictionary<GridPos, string[]> signs = new Dictionary<GridPos, string[]>(MaxRooms);
         readonly HashSet<GridPos> prepared = new HashSet<GridPos>();
+        readonly HashSet<RoomConnection> openDoors = new HashSet<RoomConnection>();
 
         /// <summary>Offsets within each radius, center first, then by distance, then y descending (상 first), x ascending.</summary>
         static readonly GridPos[][] OffsetsByRadius = BuildOffsets();
@@ -72,28 +80,39 @@ namespace WordRoom.World
             return result;
         }
 
+        /// <param name="session">Valid only inside the coordinator's capture or Read callback.</param>
+        /// <param name="playerId">The player the view is centered on (the local player).</param>
         /// <param name="wordText">Surface of a word id (the dataset's existing lookup); called here, on the worker.</param>
         /// <param name="radius">Display radius (clamped to 1–3).</param>
-        public static RoomViewSnapshot Capture(RoomMap map, Func<int, string> wordText, int radius = 1)
+        public static RoomViewSnapshot Capture(SessionReader session, string playerId, Func<int, string> wordText, int radius = 1)
         {
             radius = Math.Max(1, Math.Min(MaxRadius, radius));
-            var s = new RoomViewSnapshot { Center = map.Position, Status = map.Status, Radius = radius, TargetWord = wordText(map.Target), UniqueVisited = map.UniqueVisited };
-            if (map.TryGetWord(map.Position, out var here)) s.CurrentWord = wordText(here);
+            var center = session.PlayerPosition(playerId);
+            var s = new RoomViewSnapshot
+            {
+                SessionId = session.SessionId, Revision = session.Revision, PlayerId = playerId, Center = center, Status = session.Status,
+                Radius = radius, TargetWord = wordText(session.TargetWord),
+            };
+            if (session.TryGetWord(center, out var here)) s.CurrentWord = wordText(here);
             foreach (var offset in OffsetsByRadius[radius])                    // the center comes first
             {
-                var q = map.Position.Add(offset);
-                if (map.TryGetWord(q, out var w)) s.Add(map, q, w, wordText);   // 미생성 좌표는 표시하지 않음
+                var q = center.Add(offset);
+                if (session.TryGetWord(q, out var w)) s.Add(session, q, w, wordText);   // 미생성 좌표는 표시하지 않음
             }
             return s;
         }
 
-        void Add(RoomMap map, GridPos p, int word, Func<int, string> wordText)
+        void Add(SessionReader session, GridPos p, int word, Func<int, string> wordText)
         {
             rooms.Add(new KeyValuePair<GridPos, int>(p, word));
-            if (map.IsPrepared(p)) prepared.Add(p);
+            if (session.IsPrepared(p)) prepared.Add(p);
             var n = new string[4];
             foreach (var d in Directions.DisplayOrder)
-                n[(int)d] = map.TryGetWord(p.Add(Directions.Offset(d)), out var w) ? wordText(w) : null;
+            {
+                n[(int)d] = session.TryGetWord(p.Add(Directions.Offset(d)), out var w) ? wordText(w) : null;
+                var id = RoomConnection.Of(p, d);
+                if (session.Door(id) == DoorState.Open) openDoors.Add(id);
+            }
             signs[p] = n;
         }
     }

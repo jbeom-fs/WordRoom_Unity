@@ -20,20 +20,24 @@ namespace WordRoom.RoomDebug
     }
 
     /// <summary>
-    /// Debug-only check of the room generator: Inspector settings, arrow keys (↑ 상, ↓ 하, ← 좌, → 우) and Console
-    /// output. No map or network; the only UI is the optional one-line PlayHint in player mode. Generation runs on
-    /// a worker thread; input is ignored (not queued) while data is loading or a request is running. The settings
-    /// are copied when an experiment starts.
-    /// Optional 3D view (RoomWorldView): after each finished request a snapshot of the current room and its
-    /// existing neighbors is taken on the worker and shown on the main thread; without it only Console output.
+    /// Single-player front end of a session: Inspector settings, arrow keys (↑ 상, ↓ 하, ← 좌, → 우), Console output,
+    /// and the local display (3D view, HUD, hint, explored map, first-person player). Each experiment is one
+    /// SessionCoordinator in solo mode with one registered player (LocalPlayer); every logical change — start, door
+    /// opening (Prepare), entry (Enter), arrow-key Move — is a request to it, and every display copy (3D snapshot,
+    /// map change, log text) is captured inside that request on the worker. The main thread never reads the
+    /// session; it shows the copies and keeps only local state (player, input locks, menus, HUD words, shown
+    /// radius). Requests run one at a time; input is ignored (not queued) while data is loading or a request is
+    /// running. The settings are copied when an experiment starts.
+    /// Optional 3D view (RoomWorldView): after each finished request a snapshot around the local player's confirmed
+    /// room is shown on the main thread; without it only Console output.
     /// Optional first-person player: placed on the start room floor once it is shown; while it is set and active,
     /// the arrow keys do not move the logical position and the debug camera is not moved (one rule, ActivePlayer,
     /// for placement, input, arrow keys and camera). The player opens doors of the current room with E: the door
-    /// slides up while one generator Prepare fills the neighbors of the room behind it (no move, no visit); the
-    /// doorway opens when both are done. Walking through it is one generator Enter (no fill), and walking stays
-    /// locked during each request until its result is shown (and, for an entry, the player stands on the arrival
-    /// floor). The arrow keys keep the combined Move. A player that is disconnected, replaced or disabled is
-    /// stopped and only placed again by a new experiment.
+    /// slides up locally while one Prepare request stores the connection Open and fills the neighbors of the room
+    /// behind it (no move, no visit); the doorway opens when both are done. Walking through it is one Enter request
+    /// (no fill), and walking stays locked during each request until its result is shown (and, for an entry, the
+    /// player stands on the arrival floor). The arrow keys keep the combined Move. A player that is disconnected,
+    /// replaced or disabled is stopped and only placed again by a new experiment.
     /// Two ways to start: the Inspector words (StartExperiment; automatically when startWhenDataReady, the
     /// development scene) or StartGame with words, seed and vocabulary chosen by the game (the menu flow, with
     /// automatic start off). The display radius (GameSettings.DisplayRadius) is read when each request starts; a
@@ -89,9 +93,14 @@ namespace WordRoom.RoomDebug
 
         const float DoorReach = 2f;          // E reaches doors up to this far from the eye along the screen center
 
+        /// <summary>The one logical player of a single-player session (this device's player).</summary>
+        public const string LocalPlayer = "local";
+
         WordRoomDataService service;
-        RoomGenerator generator;
+        SessionCoordinator session;          // the current experiment's authority; null while none is running
         WordRoomDataset dataset;
+        long nextRequest;                    // request ids of this device (never reused within a session)
+        GridPos expectedRoom;                // the local player's room from the last accepted change, sent as ExpectedFrom
         CancellationTokenSource cts;
         bool busy;
         bool waitingLogged;
@@ -109,13 +118,13 @@ namespace WordRoom.RoomDebug
         string haltHintFor, haltHintText;    // hint texts kept for the reason/status they were made from
         string endHintFor, endHintText;
         string unplacedHintText;
-        double playStartTime = double.NaN;   // real time (Time.realtimeSinceStartupAsDouble) control first became possible; NaN = not yet
-        bool goalReported;                   // this experiment's GoalReached was raised (at most once)
+        bool goalReported;                   // this experiment's GoalReached was raised (at most once; the result itself is the session's)
 
         /// <summary>
         /// Raised once per experiment when a first-person entry into the target room is confirmed (entry accepted,
         /// view shown, player on the arrival floor; never for door opening, Prepare, arrow-key Moves, refusals,
-        /// cancelled or stale results), with the fixed time and visit count. Only when the play clock had started.
+        /// duplicates, cancelled or stale results), with the session's fixed time and visit count. Only when the
+        /// play clock had started.
         /// </summary>
         public event Action<GoalResult> GoalReached;
 
@@ -127,15 +136,16 @@ namespace WordRoom.RoomDebug
 
         // Explored map for a map screen (main thread only; filled from the finished requests' worker copies).
         readonly ExploredMap exploredMap = new ExploredMap();
-        int mapSession;
         bool trackMap;
         bool mapResync;                      // the next request copies the whole map (after a gap or late tracking)
+        bool mapRecovering;
         bool mapDesyncLogged;
 
         /// <summary>
-        /// Every room generated in this experiment, visited or not, and the confirmed current room, for a map screen.
-        /// Updated only at the end of a start, Prepare, Enter or Move request (never by looking at it); empty until the
-        /// start finished and while TrackExploredMap is off.
+        /// Every room generated in this experiment, the team's visits, and each player's confirmed room (Current =
+        /// the local player's), for a map screen. Updated only from the changes of start, Prepare, Enter or Move
+        /// requests, in revision order (never by looking at it); empty until the start finished and while
+        /// TrackExploredMap is off.
         /// </summary>
         public ExploredMap ExploredMap => exploredMap;
 
@@ -154,7 +164,7 @@ namespace WordRoom.RoomDebug
         }
 
         /// <summary>A placed, connected, active player in a running or finished experiment that is not stopped: a map can be used.</summary>
-        public bool CanShowMap => halt == null && generator != null && controlled != null && controlled == player && controlled.Placed;
+        public bool CanShowMap => halt == null && session != null && controlled != null && controlled == player && controlled.Placed;
 
         /// <summary>The connected player when its component and object are active; null = arrow-key/camera debug.</summary>
         FirstPersonPlayer ActivePlayer => player != null && player.isActiveAndEnabled ? player : null;
@@ -240,7 +250,7 @@ namespace WordRoom.RoomDebug
         {
             if (s.State == DataLoadState.Failed)
                 Debug.LogError($"[방 생성] 데이터 로딩 실패로 실험을 시작할 수 없습니다: {s.Error?.Message}");
-            else if (s.State == DataLoadState.Ready && startWhenDataReady && generator == null && !busy)
+            else if (s.State == DataLoadState.Ready && startWhenDataReady && session == null && !busy)
                 StartExperiment();
         }
 
@@ -335,7 +345,7 @@ namespace WordRoom.RoomDebug
             cts = new CancellationTokenSource();
             var token = cts.Token;
             busy = true;
-            generator = null;
+            session = null;
             dataset = d;
             var view = worldView != null;
             // Kept by reference: a failed start releases exactly these (cursor too), even after `controlled` is cleared.
@@ -346,33 +356,39 @@ namespace WordRoom.RoomDebug
             controlled = null;
             status = null;
             halt = null;
-            playStartTime = double.NaN;                           // time, visits and result belong to one experiment
-            goalReported = false;
+            goalReported = false;                                 // time, visits and result belong to the new session
             SuppressGoalHint = false;
-            mapSession++;                                         // the explored map starts over; older updates are refused
-            exploredMap.Reset(mapSession);
+            nextRequest = 0;
+            expectedRoom = GridPos.Origin;
+            exploredMap.Reset(null, LocalPlayer);                 // the explored map starts over; older updates are refused
             mapResync = false;
-            var mapRequest = new MapRequest(TrackExploredMap, mapSession, 0, true);
             Raise(ExperimentStarted);
             shownRadius = -1;
             SetHudWords(null, null);                              // the previous experiment's words never come back
-            if (view) ViewCall(() => worldView.BeginSession());   // previous rooms/doors back to the pools, door states cleared
+            if (view) ViewCall(() => worldView.BeginSession());   // previous rooms/doors back to the pools (door states are the session's)
             Debug.Log($"[방 생성] 새 실험 준비: {d.GetWord(start)} → {d.GetWord(target)} · {config}" +
                       (config.TargetGuidance ? " · 목표 근접도 계산 중" : ""));
-            var radius = GameSettings.DisplayRadius;
+            var capture = new CaptureRequest(d, view, GameSettings.DisplayRadius, new MapRequest(TrackExploredMap, true), verboseLog);
+            var radius = capture.Radius;
             try
             {
-                var (gen, update, snapshot, mapUpdate) = await Task.Run(() =>
+                var (created, result) = await Task.Run(() =>
                 {
-                    var g = RoomGenerator.Create(d, config, start, target, token);
-                    var u = g.Start(token);
-                    return (g, u, view ? RoomViewSnapshot.Capture(g.Map, d.GetWord, radius) : null, mapRequest.Capture(g.Map, d.GetWord));   // taken here, after the request finished
+                    var c = SessionCoordinator.CreateSolo(d, config, start, target, LocalPlayer, token);
+                    var r = c.Start(capture.Run, token);          // copies taken inside the start
+                    return (c, r);
                 }, token);
                 if (this == null || token.IsCancellationRequested) return;
-                generator = gen;
-                ApplyMap(mapUpdate);                                  // start room and its first neighbors
-                status = update.Status;
-                LogUpdate(update);
+                if (!result.Accepted)
+                {
+                    FailStart($"실험을 시작할 수 없습니다 — {result.Refusal}", stoppedControlled, stoppedPlayer, ActivePlayer);
+                    return;
+                }
+                var captured = result.Captured;                       // a start is never a duplicate
+                session = created;
+                exploredMap.Reset(created.SessionId, LocalPlayer);
+                TakeConfirmed(captured);                              // start room and its first neighbors (full copy)
+                var snapshot = captured.View;
                 var shown = ShowView(snapshot, out var showFailure);
                 if (shown) shownRadius = radius;
                 var placeFailure = PlacePlayer(snapshot, shown, showFailure);
@@ -429,26 +445,17 @@ namespace WordRoom.RoomDebug
             }
             SetHint(HaltHint);                // debug mode: only a stop reason stays on screen
             if (direction == null) return;
-            if (busy || generator == null)
+            if (busy || session == null)
             {
                 if (verboseLog) Debug.Log("[방 생성] 로딩·생성 중이라 입력을 무시했습니다 (입력은 쌓아두지 않음).");
                 return;
             }
-            var map = generator.Map;
-            if (map.Status != "running")
+            if (status != "running")                       // the status copied from the last change; the session checks it again
             {
-                Debug.Log($"[방 생성] 실험이 끝나 이동하지 않습니다: {StatusText.Korean(map.Status)}");
+                Debug.Log($"[방 생성] 실험이 끝나 이동하지 않습니다: {StatusText.Korean(status)}");
                 return;
             }
-            var dest = map.Position.Add(Directions.Offset(direction.Value));
-            if (!map.HasRoom(dest))
-            {
-                var reason = map.EmptyReason(map.Position, dest);
-                Debug.Log($"[방 생성] {Directions.Korean(direction.Value)}: 미생성이라 이동할 수 없습니다" +
-                          (reason != null ? $" — {ReasonText(reason)}" : ""));
-                return;
-            }
-            Move(direction.Value);
+            Move(direction.Value);                         // a 미생성 direction is refused by the session (reason logged)
         }
 
         /// <summary>One direction per frame: the first newly pressed arrow in the order ↑ ↓ ← →.</summary>
@@ -474,26 +481,22 @@ namespace WordRoom.RoomDebug
         {
             busy = true;
             var token = cts.Token;
-            var gen = generator;
-            var d = dataset;
-            var view = worldView != null;
-            var radius = GameSettings.DisplayRadius;
+            var s = session;
+            var request = NewRequest(RequestKind.Move, direction);
+            var capture = CaptureNow();
+            var radius = capture.Radius;
             try
             {
-                var mapRequest = MapRequestNow();
-                var (update, refusal, snapshot, mapUpdate) = await Task.Run(() =>
-                {
-                    var u = gen.Move(direction, out var r, token);
-                    return (u, r, view && u != null ? RoomViewSnapshot.Capture(gen.Map, d.GetWord, radius) : null, u != null ? mapRequest.Capture(gen.Map, d.GetWord) : null);
-                }, token);
-                if (this == null || token.IsCancellationRequested || gen != generator) return;   // stale result of an earlier experiment
-                if (update == null) Debug.Log($"[방 생성] 이동 불가: {refusal}");     // refused: the 3D view is not moved
+                var result = await Task.Run(() => s.Submit(request, capture.Run, token), token);
+                if (this == null || token.IsCancellationRequested || s != session) return;   // stale result of an earlier experiment
+                if (!result.Accepted && !result.Duplicate) Debug.Log($"[방 생성] 이동 불가: {result.Refusal}");     // refused: nothing changed, the 3D view is not moved
                 else
                 {
-                    ApplyMap(mapUpdate);
-                    status = update.Status;
-                    LogUpdate(update);
-                    if (ShowView(snapshot, out _)) shownRadius = radius;   // Console debug: an incomplete view is logged by the view itself
+                    var current = await Current(result, s, capture, token);
+                    if (current == null) return;
+                    var captured = current.Value;
+                    TakeConfirmed(captured);
+                    if (ShowView(captured.View, out _)) shownRadius = radius;   // Console debug: an incomplete view is logged by the view itself
                 }
             }
             catch (OperationCanceledException)
@@ -517,27 +520,27 @@ namespace WordRoom.RoomDebug
         /// </summary>
         void RefreshRadiusIfChanged()
         {
-            if (busy || generator == null || worldView == null || halt != null || shownRadius < 0) return;
+            if (busy || session == null || worldView == null || halt != null || shownRadius < 0) return;
             var radius = GameSettings.DisplayRadius;
             if (radius != shownRadius) RefreshView(radius);
         }
 
         /// <summary>
         /// Re-captures the existing map on the worker with `radius` and shows it (rooms leaving the range go back to
-        /// the pool, rooms entering it are rented; the current room always stays). Only a snapshot: no Fill, Prepare,
-        /// Move or Enter, so no word, visit or move changes. Runs as a request (busy), so no generator request can
-        /// change the map meanwhile and an older result never overwrites a newer one.
+        /// the pool, rooms entering it are rented; the current room always stays). Only a snapshot (the session's
+        /// Read, inside its lock, so no change can mix in): no Fill, Prepare, Move or Enter, so no word, visit or
+        /// move changes. Runs as a local request (busy), so an older result never overwrites a newer one.
         /// </summary>
         async void RefreshView(int radius)
         {
             busy = true;
             var token = cts.Token;
-            var gen = generator;
+            var s = session;
             var d = dataset;
             try
             {
-                var snapshot = await Task.Run(() => RoomViewSnapshot.Capture(gen.Map, d.GetWord, radius), token);
-                if (this == null || token.IsCancellationRequested || gen != generator) return;   // stale result
+                var snapshot = await Task.Run(() => s.Read(r => RoomViewSnapshot.Capture(r, LocalPlayer, d.GetWord, radius)), token);
+                if (this == null || token.IsCancellationRequested || s != session) return;   // stale result
                 if (ShowView(snapshot, out var failure)) shownRadius = radius;
                 else if (controlled != null) Halt($"표시 거리 변경 후 방 표시 준비 실패 — {failure}");
                 else shownRadius = radius;                                         // Console debug: logged by the view; no retry loop
@@ -548,7 +551,7 @@ namespace WordRoom.RoomDebug
             catch (Exception e)
             {
                 Debug.LogException(e);
-                if (this == null || gen != generator || token.IsCancellationRequested) return;
+                if (this == null || s != session || token.IsCancellationRequested) return;
                 if (controlled != null) Halt("표시 거리 변경 중 오류가 났습니다(Console 확인)");
                 else shownRadius = radius;                                         // Console debug: no retry every frame
             }
@@ -599,7 +602,7 @@ namespace WordRoom.RoomDebug
             }
             if (controlled == null)
             {
-                SetHint(generator != null ? UnplacedHint : null);
+                SetHint(session != null ? UnplacedHint : null);
                 return;
             }
             if (status != "running")
@@ -617,14 +620,16 @@ namespace WordRoom.RoomDebug
         }
 
         /// <summary>
-        /// The door toward `side` was just opened (its slide has started): in the same frame one generator Prepare
-        /// fills the empty neighbors of the room behind it on the worker, with the snapshot taken there. The current
-        /// room, moves, visits and status do not change. Walking and door use are locked meanwhile (look, gravity and
-        /// Escape go on); no other request is accepted or queued. The main thread then shows the result still
-        /// centered on the current room (new words on the signs; the room behind the door now counts as prepared),
-        /// and walking resumes. The doorway opens only when the slide has also finished (RoomWorldView.IsPassable).
-        /// A partial fill is a normal result; a refusal, a failed display or an error stops play instead, with
-        /// nothing undone or retried. A result after a new experiment, disabling or a player change does nothing.
+        /// The door toward `side` was just opened here (its slide has started): in the same frame one Prepare request
+        /// stores the connection Open and fills the empty neighbors of the room behind it on the worker, with the
+        /// snapshot taken inside the request. The local player's room, moves, visits and the session status do not
+        /// change. Walking and door use are locked meanwhile (look, gravity and Escape go on); no other request is
+        /// accepted or queued. The main thread then shows the result still centered on the current room (new words on
+        /// the signs; the door confirmed Open; the room behind it now counts as prepared), and walking resumes. The
+        /// doorway opens only when the slide has also finished (RoomWorldView.IsPassable). A partial fill is a normal
+        /// result; a refusal, a failed display or an error stops this device's play instead (the session itself is
+        /// not ended), with nothing undone or retried. A result after a new experiment, disabling or a player change
+        /// does nothing.
         /// </summary>
         async void PrepareRoom(Direction side)
         {
@@ -633,28 +638,24 @@ namespace WordRoom.RoomDebug
             busy = true;
             SetHint(null);                                                         // no caption while waiting
             var token = cts.Token;
-            var gen = generator;
-            var d = dataset;
-            var view = worldView != null;
-            var radius = GameSettings.DisplayRadius;
+            var s = session;
+            var request = NewRequest(RequestKind.Prepare, side);
+            var capture = CaptureNow();
+            var radius = capture.Radius;
             try
             {
-                var mapRequest = MapRequestNow();
-                var (update, refusal, snapshot, mapUpdate) = await Task.Run(() =>
+                var result = await Task.Run(() => s.Submit(request, capture.Run, token), token);
+                if (this == null || token.IsCancellationRequested || s != session) return;   // stale result
+                if (!result.Accepted && !result.Duplicate)
                 {
-                    var u = gen.Prepare(side, out var r, token);
-                    return (u, r, view && u != null ? RoomViewSnapshot.Capture(gen.Map, d.GetWord, radius) : null, u != null ? mapRequest.Capture(gen.Map, d.GetWord) : null);
-                }, token);
-                if (this == null || token.IsCancellationRequested || gen != generator) return;   // stale result
-                if (update == null)
-                {
-                    Halt($"{Directions.Korean(side)} 방 주변 준비가 거절되었습니다 — {refusal}");
+                    Halt($"{Directions.Korean(side)} 방 주변 준비가 거절되었습니다 — {result.Refusal}");
                     return;
                 }
-                ApplyMap(mapUpdate);                                               // new rooms join the map unvisited
-                status = update.Status;
-                LogUpdate(update);
-                var shown = ShowView(snapshot, out var showFailure);
+                var current = await Current(result, s, capture, token);           // a duplicate: the current state, read separately
+                if (current == null) return;
+                var captured = current.Value;
+                TakeConfirmed(captured);                                           // new rooms join the map unvisited
+                var shown = ShowView(captured.View, out var showFailure);
                 if (shown) shownRadius = radius;
                 if (controlled != p) return;                                       // released meanwhile
                 if (!shown)
@@ -671,7 +672,7 @@ namespace WordRoom.RoomDebug
             catch (Exception e)
             {
                 Debug.LogException(e);
-                if (this != null && gen == generator && !token.IsCancellationRequested) Halt("주변 준비 중 오류가 났습니다(Console 확인)");
+                if (this != null && s == session && !token.IsCancellationRequested) Halt("주변 준비 중 오류가 났습니다(Console 확인)");
             }
             finally
             {
@@ -696,12 +697,15 @@ namespace WordRoom.RoomDebug
 
         /// <summary>
         /// Entered the neighbor on `side`: walking and door use stop at once (look, gravity and Escape go on), one
-        /// generator Enter (position, moves, visits, target and test limit only — its neighbors were filled when its
-        /// door was opened, so there is no generation wait) runs on the worker with the snapshot taken there, the
-        /// main thread shows the result centered on the arrival room, and walking resumes where the player stands
-        /// (no re-placement) once that view is complete and the arrival room is under the player. A refused entry,
-        /// a failed display or an error stops play instead; nothing is undone or retried. A result arriving after
-        /// a new experiment, disabling or a player change never gives control back.
+        /// Enter request (the local player's position, moves, visits, the team visit set, target and test limit only
+        /// — its neighbors were filled when its door was opened, so there is no generation wait) runs on the worker
+        /// with the snapshot taken inside it, carrying the boundary crossing time as the end of the play time; the
+        /// main thread shows the result centered on the arrival room, and walking resumes where the player stands (no
+        /// re-placement) once that view is complete and the arrival room is under the player. Only then is the
+        /// session's confirmed result handed to the result screen (its time stays the crossing time). A refused
+        /// entry, a failed display or an error stops this device's play instead; nothing is undone or retried (a
+        /// confirmed entry stays confirmed). A result arriving after a new experiment, disabling or a player change
+        /// never gives control back.
         /// </summary>
         async void EnterRoom(Direction side)
         {
@@ -711,27 +715,24 @@ namespace WordRoom.RoomDebug
             busy = true;
             SetHint(null);                                                         // no caption while waiting
             var token = cts.Token;
-            var gen = generator;
-            var d = dataset;
-            var view = worldView != null;
-            var radius = GameSettings.DisplayRadius;
+            var s = session;
+            var request = NewRequest(RequestKind.Enter, side, crossedAt);
+            var capture = CaptureNow();
+            var radius = capture.Radius;
             try
             {
-                var mapRequest = MapRequestNow();
-                var (update, refusal, snapshot, mapUpdate) = await Task.Run(() =>
+                var result = await Task.Run(() => s.Submit(request, capture.Run, token), token);
+                if (this == null || token.IsCancellationRequested || s != session) return;   // stale result
+                if (!result.Accepted && !result.Duplicate)
                 {
-                    var u = gen.Enter(side, out var r, token);
-                    return (u, r, view && u != null ? RoomViewSnapshot.Capture(gen.Map, d.GetWord, radius) : null, u != null ? mapRequest.Capture(gen.Map, d.GetWord) : null);
-                }, token);
-                if (this == null || token.IsCancellationRequested || gen != generator) return;   // stale result
-                if (update == null)
-                {
-                    Halt($"{Directions.Korean(side)} 방 입장이 거절되었습니다 — {refusal}");
+                    Halt($"{Directions.Korean(side)} 방 입장이 거절되었습니다 — {result.Refusal}");
                     return;
                 }
-                ApplyMap(mapUpdate);                                               // the entered room becomes current and visited
-                status = update.Status;
-                LogUpdate(update);
+                var current = await Current(result, s, capture, token);           // a duplicate: the current state, read separately
+                if (current == null) return;
+                var captured = current.Value;
+                var snapshot = captured.View;
+                TakeConfirmed(captured);                                           // the entered room becomes this player's room and team-visited
                 var shown = ShowView(snapshot, out var showFailure);
                 if (shown) shownRadius = radius;
                 if (controlled != p) return;                                       // released meanwhile
@@ -747,7 +748,7 @@ namespace WordRoom.RoomDebug
                 lastPosition = p.transform.position;
                 p.SetMovementLocked(status != "running");                          // finished: look and Escape only
                 SetHudWords(snapshot.CurrentWord, hudTarget);                      // entry confirmed and shown: new current room, same target
-                if (update.Arrived) ReportGoal(crossedAt, snapshot.UniqueVisited);
+                if (!result.Duplicate && result.Update.Result != null) ReportGoal(result.Update.Result);   // a duplicate never reports again
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -755,7 +756,7 @@ namespace WordRoom.RoomDebug
             catch (Exception e)
             {
                 Debug.LogException(e);
-                if (this != null && gen == generator && !token.IsCancellationRequested) Halt("입장 처리 중 오류가 났습니다(Console 확인)");
+                if (this != null && s == session && !token.IsCancellationRequested) Halt("입장 처리 중 오류가 났습니다(Console 확인)");
             }
             finally
             {
@@ -806,80 +807,201 @@ namespace WordRoom.RoomDebug
             }
         }
 
+        // ---- requests and captures -------------------------------------------------------------------------------
+        /// <summary>A request of the local player from its last confirmed room (the session checks it against its own record).</summary>
+        SessionRequest NewRequest(RequestKind kind, Direction side, double crossedAt = double.NaN) =>
+            new SessionRequest(session.SessionId, LocalPlayer, ++nextRequest, kind, expectedRoom, side, crossedAt);
+
+        /// <summary>
+        /// Main thread: the copies of one revision become the local state — map change, status and the room sent as
+        /// ExpectedFrom next — all from the same capture or Read, never from an old Update.
+        /// </summary>
+        void TakeConfirmed(Captured c)
+        {
+            ApplyMap(c.Map);
+            status = c.Status;
+            expectedRoom = c.Room;
+            if (c.Log != null) Debug.Log(c.Log);
+        }
+
+        /// <summary>
+        /// What one request copies, inside the session's lock right after its change (worker thread), or what a Read
+        /// copies of the current state (after a duplicate response, which carries no capture). Status and Room are
+        /// the session status and the local player's confirmed room of the same revision.
+        /// </summary>
+        readonly struct Captured
+        {
+            public readonly RoomViewSnapshot View;
+            public readonly MapUpdate Map;
+            public readonly string Log;
+            public readonly string Status;
+            public readonly GridPos Room;
+
+            public Captured(RoomViewSnapshot view, MapUpdate map, string log, string status, GridPos room)
+            {
+                View = view;
+                Map = map;
+                Log = log;
+                Status = status;
+                Room = room;
+            }
+        }
+
+        /// <summary>The copies a request wants, decided on the main thread when the request starts (Unity values read there).</summary>
+        sealed class CaptureRequest
+        {
+            readonly WordRoomDataset data;
+            readonly bool view;
+            readonly MapRequest map;
+            readonly bool verbose;
+            public readonly int Radius;
+
+            public CaptureRequest(WordRoomDataset data, bool view, int radius, MapRequest map, bool verbose)
+            {
+                this.data = data;
+                this.view = view;
+                Radius = radius;
+                this.map = map;
+                this.verbose = verbose;
+            }
+
+            /// <summary>Worker, inside the coordinator's lock right after the change: every copy belongs to the revision of `u`.</summary>
+            public Captured Run(SessionReader r, GenerationUpdate u) =>
+                new Captured(view ? RoomViewSnapshot.Capture(r, LocalPlayer, data.GetWord, Radius) : null, map.Capture(r, u, data.GetWord),
+                    Describe(r, u, data, verbose), r.Status, r.PlayerPosition(LocalPlayer));
+
+            /// <summary>Worker, inside a Read: the current state (no change of its own), the map as a full copy of this revision.</summary>
+            public Captured Latest(SessionReader r) =>
+                new Captured(view ? RoomViewSnapshot.Capture(r, LocalPlayer, data.GetWord, Radius) : null, map.CaptureFull(r, data.GetWord),
+                    null, r.Status, r.PlayerPosition(LocalPlayer));
+        }
+
+        /// <summary>
+        /// A request's result as the display uses it: its own capture, or — for a duplicate response, whose Update may
+        /// be older than the session — the current state read separately (never the old Update's room or status).
+        /// Null when the result is stale (new experiment, disabled) by the time the read finished.
+        /// </summary>
+        async Task<Captured?> Current(RequestResult<Captured> result, SessionCoordinator s, CaptureRequest capture, CancellationToken token)
+        {
+            if (!result.Duplicate) return result.Captured;
+            Debug.LogWarning($"[방 생성] 중복 요청 응답을 받아 최초 결과를 다시 적용하지 않고 현재 상태로 표시를 맞춥니다(요청 {result.Update?.RequestId}, 최초 {(result.Accepted ? $"확정 순번 {result.Update.Revision}" : $"거절: {result.Refusal}")}).");
+            var latest = await Task.Run(() => s.Read(capture.Latest), token);
+            if (this == null || token.IsCancellationRequested || s != session) return null;
+            return latest;
+        }
+
+        CaptureRequest CaptureNow() => new CaptureRequest(dataset, worldView != null, GameSettings.DisplayRadius, MapRequestNow(), verboseLog);
+
         // ---- explored map --------------------------------------------------------------------------------------
         /// <summary>What a request copies for the map, decided on the main thread when the request starts.</summary>
         readonly struct MapRequest
         {
             readonly bool track;
-            readonly int session;
-            readonly int known;
             readonly bool full;
 
-            public MapRequest(bool track, int session, int known, bool full)
+            public MapRequest(bool track, bool full)
             {
                 this.track = track;
-                this.session = session;
-                this.known = known;
                 this.full = full;
             }
 
-            /// <summary>Worker, inside the request's task after the request: null when the map is not tracked.</summary>
-            public MapUpdate Capture(RoomMap map, Func<int, string> wordText) => track ? MapUpdate.Capture(map, wordText, session, known, full) : null;
+            /// <summary>Worker, inside the request's capture: null when the map is not tracked; the whole map of this revision when `full`.</summary>
+            public MapUpdate Capture(SessionReader r, GenerationUpdate u, Func<int, string> wordText) =>
+                !track ? null : full ? MapUpdate.FromCopy(r.CopyAll(), wordText) : MapUpdate.FromChange(r, u, wordText);
+
+            /// <summary>Worker, inside a Read: the whole map of the current revision (null when not tracked).</summary>
+            public MapUpdate CaptureFull(SessionReader r, Func<int, string> wordText) => track ? MapUpdate.FromCopy(r.CopyAll(), wordText) : null;
         }
 
-        MapRequest MapRequestNow() => new MapRequest(trackMap, mapSession, exploredMap.Count, mapResync || !exploredMap.HasData);
+        MapRequest MapRequestNow() => new MapRequest(trackMap, mapResync || !exploredMap.HasData);
 
         /// <summary>
-        /// Main thread, after the request's stale checks: the copied change joins the explored map. A gap (should not
-        /// happen: requests never overlap and their results are applied in order) is reported once and makes the next
-        /// request copy the whole map; nothing is generated or retried for it.
+        /// Main thread, after the request's stale checks: the copied change joins the explored map in revision order.
+        /// Duplicates, older changes and other sessions' copies are dropped. A missed change (should not happen:
+        /// requests never overlap and their results are applied in order, but an interrupted request may leave a
+        /// revision without a result) is reported once and recovered from a full copy of one revision; nothing is
+        /// generated or retried for it.
         /// </summary>
         void ApplyMap(MapUpdate u)
         {
             if (u == null) return;
-            if (exploredMap.Apply(u, out var failure))
+            switch (exploredMap.Apply(u, out var failure))
             {
-                if (u.Full) mapResync = false;
-                return;
+                case MapApplyResult.Applied:
+                    if (u.Full) mapResync = false;
+                    return;
+                case MapApplyResult.Gap:
+                    mapResync = true;
+                    if (!mapDesyncLogged)
+                    {
+                        mapDesyncLogged = true;
+                        Debug.LogWarning($"[지도] 지도 갱신을 건너뛰었습니다 — {failure}. 같은 순번의 전체 사본으로 다시 맞춥니다.");
+                    }
+                    RecoverMap();
+                    return;
+                default:
+                    return;                                                        // duplicate, older or another session's copy
             }
-            if (u.Session != mapSession) return;                               // an older session's copy: dropped
-            mapResync = true;
-            if (mapDesyncLogged) return;
-            mapDesyncLogged = true;
-            Debug.LogWarning($"[지도] 지도 갱신을 건너뛰었습니다 — {failure}. 다음 요청에서 전체 지도를 다시 복사합니다.");
+        }
+
+        /// <summary>A full copy of the session (world, players, session of one revision) for the map; no request, no change.</summary>
+        async void RecoverMap()
+        {
+            if (mapRecovering || session == null || !trackMap) return;
+            mapRecovering = true;
+            var token = cts.Token;
+            var s = session;
+            var d = dataset;
+            try
+            {
+                var full = await Task.Run(() => s.Read(r => MapUpdate.FromCopy(r.CopyAll(), d.GetWord)), token);
+                if (this == null || token.IsCancellationRequested || s != session) return;
+                ApplyMap(full);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);                                            // the next request copies the whole map instead
+            }
+            finally
+            {
+                mapRecovering = false;
+            }
         }
 
         // ---- play time and goal result ------------------------------------------------------------------------
         /// <summary>
-        /// Starts the play time once per experiment, in the first frame (checked in LateUpdate, after every Update,
-        /// so no script order is needed) the placed player really reads input: FirstPersonPlayer.CanTakeInput —
-        /// placed and enabled, cursor locked, window focused, no menu block or its resume frame, walking not locked.
-        /// Loading, the first generation and placement are not counted; a menu open, a lost focus or a free cursor
-        /// at placement delays the start. No key press is awaited. A failed start or placement leaves no controlled
-        /// player, so the clock never starts; once started, menus, focus loss, cursor release and generation waits
-        /// neither stop nor restart it.
+        /// Reports the play start once per experiment to the session (which records it), in the first frame (checked
+        /// in LateUpdate, after every Update, so no script order is needed) the placed player really reads input:
+        /// FirstPersonPlayer.CanTakeInput — placed and enabled, cursor locked, window focused, no menu block or its
+        /// resume frame, walking not locked. Loading, the first generation and placement are not counted; a menu
+        /// open, a lost focus or a free cursor at placement delays the start. No key press is awaited. A failed
+        /// start or placement leaves no controlled player, so the clock never starts; once started, menus, the map,
+        /// focus loss, cursor release and generation waits neither stop nor restart it.
         /// </summary>
         void StartPlayClock()
         {
-            if (!double.IsNaN(playStartTime) || controlled == null || halt != null) return;
-            if (controlled == player && controlled.CanTakeInput) playStartTime = Time.realtimeSinceStartupAsDouble;
+            if (session == null || controlled == null || halt != null || session.PlayClockStarted) return;
+            if (controlled == player && controlled.CanTakeInput) session.StartPlayClock(Time.realtimeSinceStartupAsDouble);
         }
 
         /// <summary>
-        /// The confirmed entry reached the target: the result is fixed here, once — time up to the boundary crossing
-        /// of this entry (not its worker or display time), visits from this entry's snapshot (copied on the worker).
+        /// The confirmed goal entry is shown: hands the session's result (fixed by the coordinator in that entry —
+        /// time up to its boundary crossing, not its worker or display time) to the result screen, once.
         /// </summary>
-        void ReportGoal(double crossedAt, int visitedRooms)
+        void ReportGoal(SessionResult confirmed)
         {
             if (goalReported) return;
             goalReported = true;
-            if (double.IsNaN(playStartTime))
+            if (double.IsNaN(confirmed.Seconds))
             {
                 Debug.LogWarning("[결과] 조작 시작 시각이 기록되지 않아 목표 도달 결과를 만들지 않았습니다(안내만 표시).");
                 return;
             }
-            var result = new GoalResult(crossedAt - playStartTime, visitedRooms);
-            Debug.Log($"[결과] 목표 도달 — 소요 {result.Seconds:0.0}초, 방문 방 {result.VisitedRooms}개");
+            var result = new GoalResult(confirmed, LocalPlayer);
+            Debug.Log($"[결과] 목표 도달 — 소요 {result.Seconds:0.0}초, 방문 방 {result.VisitedRooms}개(팀 {confirmed.TeamVisitedRooms}개)");
             var handlers = GoalReached;
             if (handlers == null) return;                                      // development scene: no result screen
             try
@@ -979,43 +1101,44 @@ namespace WordRoom.RoomDebug
         }
 
         // ---- output -----------------------------------------------------------------------------------------
-        string Word(int w) => dataset.GetWord(w);
-
-        void LogUpdate(GenerationUpdate u)
+        /// <summary>Console text of one change, built inside the request's capture (worker) from the session reader.</summary>
+        static string Describe(SessionReader r, GenerationUpdate u, WordRoomDataset data, bool verbose)
         {
-            var map = generator.Map;
+            string Word(int w) => data.GetWord(w);
+            var who = u.PlayerId ?? LocalPlayer;
+            var here = r.PlayerPosition(who);
             var sb = new StringBuilder();
             if (u.Kind == "prepare")                         // door opened: the room behind it, not entered yet
             {
-                map.TryGetWord(u.To, out var there);
+                r.TryGetWord(u.To, out var there);
                 sb.Append($"문 열기 주변 준비: {Directions.Between(u.From, u.To).Map(Directions.Korean)} {Word(there)} {u.To} — 입장 전(현재 위치·이동·방문 그대로)");
                 foreach (var d in Directions.DisplayOrder)
                 {
                     var q = u.To.Add(Directions.Offset(d));
-                    sb.Append("\n  ").Append(Directions.Korean(d)).Append(": ").Append(map.TryGetWord(q, out var w) ? Word(w) : "미생성");
+                    sb.Append("\n  ").Append(Directions.Korean(d)).Append(": ").Append(r.TryGetWord(q, out var w) ? Word(w) : "미생성");
                 }
                 sb.Append('\n');
             }
-            map.TryGetWord(map.Position, out var here);      // the current room always exists
-            sb.Append($"현재: {Word(here)} {map.Position} | 목표: {Word(map.Target)}");
+            r.TryGetWord(here, out var word);                // the player's room always exists
+            sb.Append($"현재: {Word(word)} {here} | 목표: {Word(r.TargetWord)}");
             foreach (var d in Directions.DisplayOrder)
             {
-                var q = map.Position.Add(Directions.Offset(d));
-                sb.Append('\n').Append(Directions.Korean(d)).Append(": ").Append(map.TryGetWord(q, out var w) ? Word(w) : "미생성");
+                var q = here.Add(Directions.Offset(d));
+                sb.Append('\n').Append(Directions.Korean(d)).Append(": ").Append(r.TryGetWord(q, out var w) ? Word(w) : "미생성");
             }
             if (u.Arrived) sb.Append("\n목표 도착");
-            else if (map.Status != "running") sb.Append($"\n실험 종료: {StatusText.Korean(map.Status)}{(map.FailureReason != null ? $" — {map.FailureReason}" : "")}");
-            if (verboseLog) AppendDetails(sb, u);
-            Debug.Log(sb.ToString());
+            else if (r.Status != "running") sb.Append($"\n실험 종료: {StatusText.Korean(r.Status)}{(r.FailureReason != null ? $" — {r.FailureReason}" : "")}");
+            if (verbose) AppendDetails(sb, r, u, data, who);
+            return sb.ToString();
         }
 
-        void AppendDetails(StringBuilder sb, GenerationUpdate u)
+        static void AppendDetails(StringBuilder sb, SessionReader r, GenerationUpdate u, WordRoomDataset data, string who)
         {
-            var map = generator.Map;
+            string Word(int w) => data.GetWord(w);
             var f = u.Fill;
             sb.Append("\n--- 상세");
-            sb.Append($"\n{KindText(u)} · " +
-                      $"이동 {u.Moves} · 고유 방문 {map.UniqueVisited} · 생성 방 {map.RoomCount} · 목표 유도 강도 {u.GuidanceStrength.ToString("0.#####", CultureInfo.InvariantCulture)}");
+            sb.Append($"\n{KindText(u)} · 변경 순번 {u.Revision} · " +
+                      $"이동 {u.Moves} · 고유 방문 {r.PlayerUniqueVisited(who)}(팀 {r.TeamVisitedCount}) · 생성 방 {r.RoomCount} · 목표 유도 강도 {u.GuidanceStrength.ToString("0.#####", CultureInfo.InvariantCulture)}");
             if (f == null) return;
             switch (f.Stage)
             {

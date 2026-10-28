@@ -12,15 +12,18 @@ namespace WordRoom.World
     /// snapshot decides: up to 5, 13 or 25), plus one shared door per connection of those rooms. Reads only RoomViewSnapshot; never
     /// calls the generator, never creates words or rooms, and returning an instance never removes map data.
     /// Each update computes the wanted rooms and doors, returns what is no longer wanted first, then rents only
-    /// what is missing; instances still wanted stay as they are. Door states live in DoorStateStore per
-    /// connection, apart from the door instances. Each update also writes the snapshot's neighbor words to the wall
-    /// signs of every shown room. Main thread only.
-    /// Doors and passing are separate: a door of the current room toward a shown room can be opened (stored Open,
-    /// then slid up; the caller prepares the neighbors of the room behind it at the same time); a doorway lets the
-    /// player through only while its door is fully open and it joins the current room (the center of the last shown
-    /// snapshot) to another shown room that snapshot reports prepared — every other doorway keeps its passage block
-    /// on, also for open doors toward rooms outside the shown set or still being prepared. TryDetectEntry tells when
-    /// the player has passed such a doorway; moving the logical position is up to the caller (generator request).
+    /// what is missing; instances still wanted stay as they are. Door states are the session's (shared world, one
+    /// per connection whichever side asks): the view only shows the confirmed state copied in the snapshot, so
+    /// returning or showing a door again never changes or clears it. Each update also writes the snapshot's
+    /// neighbor words to the wall signs of every shown room. Main thread only.
+    /// Doors and passing are separate: a door of the current room toward a shown room can be opened locally (slid up;
+    /// the caller sends the Prepare request that stores the connection Open and prepares the room behind it); a
+    /// door that is confirmed Open but still closed here (e.g. opened by another player) slides up when shown. A
+    /// doorway lets the player through only while its door is fully up here, the snapshot confirms the connection
+    /// Open, and it joins the current room (the snapshot's local player room) to another shown room that snapshot
+    /// reports prepared — every other doorway keeps its passage block on, also for open doors toward rooms outside
+    /// the shown set or still being prepared. TryDetectEntry tells when the player has passed such a doorway;
+    /// moving the logical position is up to the caller (Enter request).
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class RoomWorldView : MonoBehaviour
@@ -74,7 +77,6 @@ namespace WordRoom.World
 
         readonly Dictionary<GridPos, RoomView> rooms = new Dictionary<GridPos, RoomView>();
         readonly Dictionary<RoomConnection, DoorView> doors = new Dictionary<RoomConnection, DoorView>();
-        readonly DoorStateStore doorStates = new DoorStateStore();
 
         // Fixed at BeginSession; rents, binds and pool create callbacks use only these, never the Inspector fields:
         // layout = prefabs, door body name, DoorPoints and door poses; each pool's Parent = the root resolved for
@@ -90,18 +92,17 @@ namespace WordRoom.World
         float doorwayHalfWidth;
         bool ready;
         GridPos? center;                      // current room of the last shown snapshot
-        RoomViewSnapshot shown;               // last shown snapshot: which shown rooms are prepared (map data, not pooled)
+        RoomViewSnapshot shown;               // last shown snapshot: prepared rooms and confirmed doors (session data, not pooled)
 
         // Roots this component created itself (never written to the Inspector fields), reused across experiments.
         Transform autoRoomRoot;
         Transform autoDoorRoot;
 
-        public DoorStateStore DoorStates => doorStates;
         public IReadOnlyCollection<GridPos> ShownRooms => rooms.Keys;
         public IReadOnlyCollection<RoomConnection> ShownDoors => doors.Keys;
 
         /// <summary>
-        /// New experiment: 1) return what is shown and clear the previous door states, 2) fix the prefab settings
+        /// New experiment: 1) return what is shown (door states belong to the session, nothing to clear here), 2) fix the prefab settings
         /// (layout rebuilt only when they changed), 3) resolve the two roots, 4) rebuild a pool only when its layout
         /// or root changed (otherwise its instances are reused), 5) fix the placement values. Inspector edits made
         /// during an experiment take effect here, at the next one. On a setting error the 3D view stays off for this
@@ -110,10 +111,9 @@ namespace WordRoom.World
         public void BeginSession()
         {
             ReleaseAll();
-            doorStates.Clear();
             ready = false;
             center = null;
-            shown = null;                                 // preparation info goes with the door states
+            shown = null;                                 // the previous session's preparation and door copies
             HandOverIfUserRoot(ref autoRoomRoot);         // before any cleanup or root resolving, also on a setting error
             HandOverIfUserRoot(ref autoDoorRoot);
 
@@ -212,8 +212,13 @@ namespace WordRoom.World
             }
             foreach (var id in wantDoors)
             {
-                if (doors.ContainsKey(id)) continue;
-                if (!RentDoor(id, out var created)) continue;
+                if (doors.TryGetValue(id, out var kept))
+                {
+                    // confirmed Open (another player, or a slide this device started) but closed here: slide it up
+                    if (kept != null && kept.State == DoorState.Closed && s.Door(id) == DoorState.Open) kept.BeginOpening(openLift, openSeconds);
+                    continue;
+                }
+                if (!RentDoor(id, s.Door(id), out var created)) continue;
                 doorsIn++;
                 if (created) doorsNew++;
             }
@@ -253,7 +258,7 @@ namespace WordRoom.World
             sb.Append($"\n활성 문 {doors.Count}개: {string.Join(" ", doors.Keys.OrderBy(id => id))}");
             sb.Append($"\n이번 갱신: 방 대여 {roomsIn}(새 생성 {roomsNew})·반환 {roomsOut}, 문 대여 {doorsIn}(새 생성 {doorsNew})·반환 {doorsOut}");
             sb.Append($"\n풀 누적: 방 생성 {roomPool.Created}·대여 {roomPool.Rents}·반환 {roomPool.Returns}·대기 {roomPool.FreeCount}, " +
-                      $"문 생성 {doorPool.Created}·대여 {doorPool.Rents}·반환 {doorPool.Returns}·대기 {doorPool.FreeCount} · 저장된 문 상태 {doorStates.Count}");
+                      $"문 생성 {doorPool.Created}·대여 {doorPool.Rents}·반환 {doorPool.Returns}·대기 {doorPool.FreeCount}");
             Debug.Log(sb.ToString());
         }
 
@@ -265,17 +270,6 @@ namespace WordRoom.World
         }
 
         bool IsShownUsable(GridPos p) => rooms.TryGetValue(p, out var v) && v != null && v.IsUsable(p);
-
-        /// <summary>
-        /// Stores the state of a connection and applies it immediately to its shown door, if any (no animation).
-        /// The player's door opening uses OpenDoor instead.
-        /// </summary>
-        public void SetDoorState(RoomConnection id, DoorState state)
-        {
-            doorStates.Set(id, state);
-            if (doors.TryGetValue(id, out var door) && door != null) door.Apply(state, openLift);
-            UpdatePassages();
-        }
 
         /// <summary>
         /// Whether `door` (e.g. the one the player aims at) may be opened: it is the shown door of a closed connection
@@ -292,17 +286,17 @@ namespace WordRoom.World
         }
 
         /// <summary>
-        /// Opens a door that CanOpen allows: the shown door starts sliding up and the connection is stored Open (so a
-        /// door returned to the pool while sliding comes back fully open). `side` is the direction from the current
-        /// room to the room behind the door, for the caller's preparation request. False when refused — then nothing
-        /// is stored and nothing slides. Opening itself never creates rooms, moves the logical position or counts a visit.
+        /// Opens a door that CanOpen allows on this device: the shown door starts sliding up. The shared state is not
+        /// changed here — the caller sends the Prepare request (in the same frame) that stores the connection Open
+        /// when the opening starts; the doorway stays blocked until a snapshot confirms it. `side` is the direction
+        /// from the current room to the room behind the door, for that request. False when refused — then nothing
+        /// slides. Opening itself never creates rooms, moves the logical position or counts a visit.
         /// </summary>
         public bool OpenDoor(RoomConnection id, out Direction side)
         {
             side = default;
             if (!doors.TryGetValue(id, out var door) || !CanOpen(door, out _)) return false;
             if (!door.BeginOpening(openLift, openSeconds)) return false;
-            doorStates.Set(id, DoorState.Open);
             side = Directions.Between(center.Value, id.A == center.Value ? id.B : id.A).Value;
             UpdatePassages();
             return true;
@@ -342,13 +336,14 @@ namespace WordRoom.World
         }
 
         /// <summary>
-        /// Door active and fully open, joining the current room `c` to another shown room whose neighbors are prepared
-        /// in the last shown snapshot. Both conditions are needed: a finished slide alone or a finished preparation
-        /// alone never opens the passage (UpdatePassages runs every frame and follows this).
+        /// Door active and fully up here, confirmed Open, joining the current room `c` to another shown room whose
+        /// neighbors are prepared in the last shown snapshot (checked for the direction of travel: the room behind the
+        /// door). All are needed: a finished slide alone or a finished preparation alone never opens the passage
+        /// (UpdatePassages runs every frame and follows this).
         /// </summary>
         bool IsPassable(RoomConnection id, GridPos c) =>
             doors.TryGetValue(id, out var door) && door != null && door.Active && door.FullyOpen &&
-            JoinsCurrentToShown(id, c) && shown != null && shown.IsPrepared(id.A == c ? id.B : id.A);
+            JoinsCurrentToShown(id, c) && shown != null && shown.Door(id) == DoorState.Open && shown.IsPrepared(id.A == c ? id.B : id.A);
 
         bool JoinsCurrentToShown(RoomConnection id, GridPos c)
         {
@@ -376,7 +371,6 @@ namespace WordRoom.World
             shown = null;
             rooms.Clear();
             doors.Clear();
-            doorStates.Clear();
             var owned = new HashSet<Transform>();
             RetirePools(owned);
             ReleaseAutoRootIfUnused(ref autoRoomRoot, owned);
@@ -584,8 +578,11 @@ namespace WordRoom.World
             }
         }
 
-        /// <summary>Door of a connection, placed from the anchor's (left/lower) 우/상 doorway. The anchor room need not be shown or exist.</summary>
-        bool RentDoor(RoomConnection id, out bool created)
+        /// <summary>
+        /// Door of a connection with its confirmed state (no animation), placed from the anchor's (left/lower) 우/상
+        /// doorway. The anchor room need not be shown or exist.
+        /// </summary>
+        bool RentDoor(RoomConnection id, DoorState state, out bool created)
         {
             created = false;
             DoorView v = null;
@@ -593,7 +590,7 @@ namespace WordRoom.World
             {
                 var pose = layout.Pose(id.AnchorSide);
                 v = doorPool.Rent(out created);
-                v.Bind(id, RoomOrigin(id.Anchor) + pose.Position, pose.Rotation, layout.DoorScale, doorStates.Get(id), openLift);
+                v.Bind(id, RoomOrigin(id.Anchor) + pose.Position, pose.Rotation, layout.DoorScale, state, openLift);
                 v.gameObject.SetActive(true);
                 doors[id] = v;
                 return true;
@@ -622,11 +619,11 @@ namespace WordRoom.World
         {
             var v = doors[id];
             doors.Remove(id);
-            if (v != null) v.Unbind();       // closed position and colliders restored; the stored state stays in DoorStateStore
+            if (v != null) v.Unbind();       // closed position and colliders restored; the confirmed state stays the session's
             if (doorPool == null || !doorPool.Return(v)) Debug.LogError($"[3D 방] 문 {id} 반환 실패: 대여 중인 인스턴스가 아닙니다(중복 반환).");
         }
 
-        /// <summary>Returns every shown instance. Only the view is cleared; RoomMap is never touched here.</summary>
+        /// <summary>Returns every shown instance. Only the view is cleared; the session is never touched here.</summary>
         void ReleaseAll()
         {
             foreach (var p in rooms.Keys.ToList()) ReleaseRoom(p);

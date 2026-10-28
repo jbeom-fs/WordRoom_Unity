@@ -1,7 +1,6 @@
 using System;
-using WordRoom.Generation;
 
-namespace WordRoom.World
+namespace WordRoom.Generation
 {
     /// <summary>
     /// Shared connection between two adjacent coordinates, normalized so A→B and B→A give the same id.

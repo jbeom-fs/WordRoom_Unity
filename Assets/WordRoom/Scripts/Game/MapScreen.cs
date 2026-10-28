@@ -47,7 +47,7 @@ namespace WordRoom.Game
         bool ready;
         bool open;
         bool unusableReported;
-        int viewSession = -1;                // explored-map session the view's center and zoom belong to
+        string viewSession;                  // explored-map session the view's center and zoom belong to (null = none)
 
         public bool IsOpen => open;
 
