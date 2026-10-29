@@ -23,6 +23,11 @@ namespace WordRoom.EditorTools
         /// <summary>The main panel's 협동 button (between 시작 and 설정).</summary>
         public static Button AddCoopButton(Transform main) => AddButton(main, "CoopButton", "협동", 360f, 68f, 28f);
 
+        public const string RefreshButtonName = "RefreshButton";
+
+        /// <summary>The lobby header's 새로고침 button (same size as 다시 연결; its caller places it before that one).</summary>
+        public static Button AddRefreshButton(Transform header) => AddButton(header, RefreshButtonName, "새로고침", 180f, 56f, 22f);
+
         /// <summary>
         /// Coop canvas (order 120): a dim overlay catching clicks (the main menu behind never reacts), the Lobby panel,
         /// the Create panel (its own overlay, inactive) and the Waiting panel (inactive). CoopLobbyView on the root holds
@@ -60,6 +65,7 @@ namespace WordRoom.EditorTools
             var status = AddText(header, "Status", "연결되지 않음", 22f, ArchiveUi.IvoryDim, TextAlignmentOptions.Right);
             OneLine(status);
             Size(status.gameObject, 0f, 64f, 1f);
+            var refresh = AddRefreshButton(header);
             var retry = AddButton(header, "RetryButton", "다시 연결", 180f, 56f, 22f);
 
             var body = NewRect("Body", panel);
@@ -125,6 +131,7 @@ namespace WordRoom.EditorTools
             Set(so, "lobbyPanel", panel.gameObject);
             Set(so, "statusText", status);
             Set(so, "retryButton", retry);
+            Set(so, "refreshButton", refresh);
             Set(so, "roomScroll", scroll);
             Set(so, "roomContent", content);
             Set(so, "roomRowTemplate", template);

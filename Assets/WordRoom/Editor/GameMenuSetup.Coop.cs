@@ -27,7 +27,8 @@ namespace WordRoom.EditorTools
         /// Only the coop lobby of the existing MainMenu scene (user-run; nothing here runs by itself):
         /// 1) MainMenuCanvas prefab: adds the 협동 button under Main (after 시작) only when there is no "Main/CoopButton";
         ///    everything else of the prefab stays as it is. 2) CoopCanvas prefab: built only when missing (an existing one
-        ///    is used as it is, except that the waiting room's difficulty row is added when it has none). 3) MainMenu scene: one CoopLobby and one CoopLobbyScreen on the MainMenu object (added
+        ///    is used as it is, except that the waiting room's difficulty row and the lobby's 새로고침 button are added when
+        ///    it has none). 3) MainMenu scene: one CoopLobby and one CoopLobbyScreen on the MainMenu object (added
         ///    when the scene has none; several are reported and left alone), the screen's lobby/view and the menu's
         ///    coopButton/coop references when empty, one Coop Canvas instance (placed inactive when new); the scene's
         ///    EventSystem is checked. Nothing is deleted or replaced; no network object is made besides CoopLobby. Neither
@@ -53,6 +54,7 @@ namespace WordRoom.EditorTools
             var temporary = false;
             var coopPrefab = LoadOrBuild(ArchiveUiBuilder.CoopPrefabPath, ArchiveUiBuilder.BuildCoopCanvas, typeof(CoopLobbyView), notes, saved, ref temporary);
             EnsureCoopDifficulty(notes, saved);
+            EnsureCoopRefresh(notes, saved);
 
             var start = notes.Count;
             var scene = EditorSceneManager.OpenScene(MainMenuPath, OpenSceneMode.Single);
@@ -66,6 +68,9 @@ namespace WordRoom.EditorTools
                 FillIfEmpty(screen, "lobby", lobby, "MainMenu: 협동 화면 → CoopLobby 연결", notes);
                 var link = Connect(screen, coopPrefab, CoopScreenLinks, scene, "MainMenu", "Coop Canvas", notes);
                 if (link.Placed != null) link.Placed.SetActive(false);              // closed until 협동
+                var sceneView = new SerializedObject(screen).FindProperty("view").objectReferenceValue as CoopLobbyView;
+                if (sceneView != null && !sceneView.HasRefresh)                    // e.g. an unpacked instance or a scene override: left as it is
+                    notes.Add($"{Warning}MainMenu: 협동 화면이 쓰는 '{PathOf(sceneView.gameObject)}'에 새로고침 버튼(refreshButton)이 연결되지 않았습니다(바꾸지 않음). 직접 연결하면 새로고침을 쓸 수 있고, 그 전에도 로비의 다른 기능은 그대로입니다");
                 Connect(menu, mainPrefab, CoopButtonLinks, scene, "MainMenu", "MainMenu Canvas", notes);
                 FillIfEmpty(menu, "coop", screen, "MainMenu: 메인 메뉴 → 협동 화면 연결", notes);
             }
@@ -119,6 +124,46 @@ namespace WordRoom.EditorTools
                 if (!ok) throw new InvalidOperationException($"{path}에 난이도 선택을 저장하지 못했습니다");
                 if (!saved.Contains(path)) saved.Add(path);
                 notes.Add($"{path}: Waiting/{ArchiveUiBuilder.DifficultyRowName}(난이도 선택) 추가 — 다른 항목은 그대로");
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(contents);
+            }
+        }
+
+        /// <summary>
+        /// Adds only the lobby's 새로고침 button to the saved CoopCanvas prefab (Lobby/Header, before 다시 연결) when its
+        /// CoopLobbyView has none connected and the header has no such button; everything else of the prefab stays as it is.
+        /// </summary>
+        static void EnsureCoopRefresh(System.Collections.Generic.List<string> notes, System.Collections.Generic.List<string> saved)
+        {
+            var path = ArchiveUiBuilder.CoopPrefabPath;
+            var contents = PrefabUtility.LoadPrefabContents(path);
+            try
+            {
+                var view = contents.GetComponent<CoopLobbyView>();
+                var header = contents.transform.Find("Lobby/Header");
+                if (view == null || header == null)
+                {
+                    notes.Add($"{Warning}{path}에 CoopLobbyView 또는 Lobby/Header가 없어 새로고침 버튼을 추가하지 않았습니다(로비의 다른 기능은 그대로). refreshButton을 직접 연결하세요");
+                    return;
+                }
+                if (view.HasRefresh) return;                                      // already there (also user-made and connected)
+                if (header.Find(ArchiveUiBuilder.RefreshButtonName) != null)
+                {
+                    notes.Add($"{Warning}{path}의 Lobby/Header/{ArchiveUiBuilder.RefreshButtonName}가 있지만 CoopLobbyView에 연결되지 않았습니다(바꾸지 않음). 직접 연결하세요");
+                    return;
+                }
+                var button = ArchiveUiBuilder.AddRefreshButton(header);
+                var retry = header.Find("RetryButton");
+                if (retry != null) button.transform.SetSiblingIndex(retry.GetSiblingIndex());   // just before 다시 연결
+                var so = new SerializedObject(view);
+                so.FindProperty("refreshButton").objectReferenceValue = button;
+                so.ApplyModifiedPropertiesWithoutUndo();
+                PrefabUtility.SaveAsPrefabAsset(contents, path, out var ok);
+                if (!ok) throw new InvalidOperationException($"{path}에 새로고침 버튼을 저장하지 못했습니다");
+                if (!saved.Contains(path)) saved.Add(path);
+                notes.Add($"{path}: Lobby/Header/{ArchiveUiBuilder.RefreshButtonName}(새로고침) 추가 — 다른 항목은 그대로");
             }
             finally
             {

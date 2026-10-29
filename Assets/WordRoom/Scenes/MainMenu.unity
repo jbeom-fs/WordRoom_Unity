@@ -2007,6 +2007,38 @@ PrefabInstance:
       propertyPath: m_AnchoredPosition.y
       value: -26
       objectReference: {fileID: 0}
+    - target: {fileID: 5093435671868248443, guid: e81a77db1dc789b4aa8edcdbdbe1c717, type: 3}
+      propertyPath: m_AnchorMax.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 5093435671868248443, guid: e81a77db1dc789b4aa8edcdbdbe1c717, type: 3}
+      propertyPath: m_AnchorMax.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 5093435671868248443, guid: e81a77db1dc789b4aa8edcdbdbe1c717, type: 3}
+      propertyPath: m_AnchorMin.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 5093435671868248443, guid: e81a77db1dc789b4aa8edcdbdbe1c717, type: 3}
+      propertyPath: m_AnchorMin.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 5093435671868248443, guid: e81a77db1dc789b4aa8edcdbdbe1c717, type: 3}
+      propertyPath: m_SizeDelta.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 5093435671868248443, guid: e81a77db1dc789b4aa8edcdbdbe1c717, type: 3}
+      propertyPath: m_SizeDelta.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 5093435671868248443, guid: e81a77db1dc789b4aa8edcdbdbe1c717, type: 3}
+      propertyPath: m_AnchoredPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 5093435671868248443, guid: e81a77db1dc789b4aa8edcdbdbe1c717, type: 3}
+      propertyPath: m_AnchoredPosition.y
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 5110808387402308114, guid: e81a77db1dc789b4aa8edcdbdbe1c717, type: 3}
       propertyPath: m_AnchorMax.x
       value: 0
@@ -2771,6 +2803,14 @@ PrefabInstance:
       propertyPath: m_AnchoredPosition.y
       value: -26
       objectReference: {fileID: 0}
+    - target: {fileID: 7321706075652955738, guid: e81a77db1dc789b4aa8edcdbdbe1c717, type: 3}
+      propertyPath: m_fontColor32.rgba
+      value: 4292733938
+      objectReference: {fileID: 0}
+    - target: {fileID: 7321706075652955738, guid: e81a77db1dc789b4aa8edcdbdbe1c717, type: 3}
+      propertyPath: m_TextStyleHashCode
+      value: -1183493901
+      objectReference: {fileID: 0}
     - target: {fileID: 7392343248114647539, guid: e81a77db1dc789b4aa8edcdbdbe1c717, type: 3}
       propertyPath: m_AnchorMax.x
       value: 0
@@ -3512,6 +3552,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 5fd0ed2efc4bcee4e830bdbd3fecfc6a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: WordRoom.Network::WordRoom.Network.CoopLobby
+  listDiagnostics: 0
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

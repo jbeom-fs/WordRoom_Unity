@@ -17,6 +17,8 @@ namespace WordRoom.Game
     /// template once and reused; a row update keeps the selection and the scroll position), the selected room's
     /// details and 입장 (enabled only while it can be joined), 방 만들기, RoomCode entry (JoinRoom only — a wrong code
     /// never creates a room), 뒤로. "No connection yet", "waiting for the list" and "no rooms" are told apart.
+    /// 새로고침 (optional reference) receives the list anew through CoopLobby; while it runs the rows are hidden and no
+    /// room request is offered, and the selection is kept by Room.Name until a received list decides on it.
     /// Waiting room: display name, RoomCode with 복사, count, participants with host and ready badges, the local
     /// ready toggle, 나가기 (the lobby comes back once Photon confirmed the leave), the host's difficulty (쉬움·보통·어려움,
     /// 보통 first; only the host can change it, a change voids every ready) and 시작 — enabled for the host only while
@@ -52,6 +54,8 @@ namespace WordRoom.Game
         string shownNotice;
         bool hasDifficulty;
         Color[] difficultyNormal;
+        bool hasRefresh;
+        bool shownHidden;                   // the rows were drawn hidden (a refresh ran)
 
         /// <summary>Raised when the screen closed back to the main menu.</summary>
         public event Action Closed;
@@ -106,6 +110,9 @@ namespace WordRoom.Game
                 }
             }
             else Debug.LogWarning("[협동] 대기실 난이도 UI가 없어 게임 시작을 할 수 없습니다(대기실의 다른 기능은 그대로). WordRoom/협동 로비 구성 메뉴로 추가하세요.", this);
+            hasRefresh = view.HasRefresh;
+            if (hasRefresh) ArchiveUi.Bind(bindings, view.refreshButton, RefreshList);
+            else Debug.LogWarning("[협동] 로비 새로고침 버튼이 없어 방 목록을 새로고침할 수 없습니다(로비의 다른 기능은 그대로). WordRoom/협동 로비 구성 메뉴로 추가하세요.", this);
             submitCode = _ => JoinCode();                                  // Enter in the RoomCode field
             view.codeInput.onSubmit.AddListener(submitCode);
             view.nameInput.characterLimit = CoopRules.MaxDisplayNameLength;
@@ -185,6 +192,13 @@ namespace WordRoom.Game
         {
             ClearLocalMessage();
             lobby.Retry();
+        }
+
+        /// <summary>새로고침: CoopLobby leaves and joins the lobby again; the screen follows its phase (a second click is refused there too).</summary>
+        void RefreshList()
+        {
+            ClearLocalMessage();
+            lobby.RefreshList();
         }
 
         void Select(CoopRoomRow row)
@@ -324,26 +338,33 @@ namespace WordRoom.Game
             view.statusText.color = statusColor;
             SetActive(view.retryButton.gameObject, phase == CoopPhase.Disconnected || (phase == CoopPhase.Idle && lobby.NoticeIsError));
 
+            var refreshing = phase == CoopPhase.RefreshingList;
+            if (hasRefresh) view.refreshButton.interactable = lobby.CanRefresh;   // also refused by CoopLobby itself
+
             var list = lobby.Rooms;
-            if (selected != null && !list.TryGet(selected, out _))          // the selected room is gone from the list
+            var confirmed = lobby.ListComplete && !refreshing;            // the current join's full list (change sets alone never decide)
+            if (selected != null && confirmed && !list.TryGet(selected, out _))   // Room.Name kept until then
             {
                 selected = null;
-                if (list.Received) SetLocalMessageSilently("선택한 방이 목록에서 사라졌습니다.", true);
+                SetLocalMessageSilently("선택한 방이 목록에 없어 선택을 해제했습니다.", true);
             }
-            if (list.Version != shownListVersion || selected != shownSelected) BindRows(list);
+            if (list.Version != shownListVersion || selected != shownSelected || refreshing != shownHidden) BindRows(list, refreshing);
 
             var inLobbyPhases = idleInLobby || phase == CoopPhase.CreatingRoom || phase == CoopPhase.JoiningRoom;
             string listText = null;
-            if (!inLobbyPhases) listText = phase == CoopPhase.Disconnected ? "연결이 끊겨 방 목록을 볼 수 없습니다." : "로비 연결을 기다리는 중입니다.";
+            if (refreshing) listText = "방 목록을 새로고침하는 중…";
+            else if (phase == CoopPhase.OutsideLobby) listText = "로비에 참가하지 못했습니다. 새로고침으로 다시 참가하세요.";
+            else if (!inLobbyPhases) listText = phase == CoopPhase.Disconnected ? "연결이 끊겨 방 목록을 볼 수 없습니다." : "로비 연결을 기다리는 중입니다.";
             else if (!list.Received) listText = "방 목록을 받는 중입니다…";
+            else if (!lobby.ListComplete) listText = list.Count == 0 ? "전체 방 목록을 아직 받지 못했습니다. 새로고침으로 다시 받으세요." : null;   // rows of change sets stay visible
             else if (list.Count == 0) listText = "열린 방이 없습니다. 방을 만들거나 RoomCode로 참가하세요.";
             view.listMessage.text = listText ?? "";
             SetActive(view.listMessage.gameObject, listText != null);
 
             LobbyRoom r = default;
-            var has = selected != null && list.TryGet(selected, out r);
-            view.selectedName.text = has ? r.DisplayName : "선택한 방 없음";
-            view.selectedCode.text = has ? $"RoomCode  {r.Name}" : "";
+            var has = selected != null && confirmed && list.TryGet(selected, out r);   // neither an earlier list nor change sets alone are shown as current
+            view.selectedName.text = has ? r.DisplayName : selected != null ? "선택한 방 확인 중…" : "선택한 방 없음";
+            view.selectedCode.text = has ? $"RoomCode  {r.Name}" : selected != null ? $"RoomCode  {selected}" : "";
             view.selectedCount.text = has ? $"{r.PlayerCount} / {r.MaxPlayers}명" : "";
             if (has) CoopText.Availability(r.Availability, view.selectedState);
             else view.selectedState.text = "";
@@ -364,10 +385,14 @@ namespace WordRoom.Game
             if (creating) view.createMessage.color = ArchiveUi.IvoryDim;
         }
 
-        /// <summary>Rows from the template as needed (never destroyed), bound in list order; the scroll position is left alone.</summary>
-        void BindRows(RoomListCache list)
+        /// <summary>
+        /// Rows from the template as needed (never destroyed), bound in list order; the scroll position is left alone.
+        /// `hidden` (a refresh runs) shows none: an earlier list is never offered as the current one.
+        /// </summary>
+        void BindRows(RoomListCache list, bool hidden)
         {
-            while (rows.Count < list.Count)
+            var count = hidden ? 0 : list.Count;
+            while (rows.Count < count)
             {
                 var row = Instantiate(view.roomRowTemplate, view.roomContent, false);
                 row.name = $"Room Row {rows.Count}";
@@ -377,13 +402,16 @@ namespace WordRoom.Game
             }
             for (var i = 0; i < rows.Count; i++)
             {
-                var visible = i < list.Count;
+                var visible = i < count;
                 if (visible) rows[i].Show(list.Rooms[i], list.Rooms[i].Name == selected);
                 else rows[i].Unbind();
                 SetActive(rows[i].gameObject, visible);
             }
+            if (lobby.ListDiagnostics)                                     // same section as the cache lines; -1 = the screen was just opened
+                lobby.ListLog($"UI 반영: 행 {count}개 표시{(hidden ? "(새로고침 중 숨김)" : "")} · 행 풀 {rows.Count} · Version {shownListVersion}→{list.Version} · Received {list.Received} · 선택 {selected ?? "없음"}");
             shownListVersion = list.Version;
             shownSelected = selected;
+            shownHidden = hidden;
         }
 
         void RefreshWaiting(CoopPhase phase)
@@ -499,6 +527,8 @@ namespace WordRoom.Game
                 case CoopPhase.CreatingRoom: return "방을 만드는 중…";
                 case CoopPhase.JoiningRoom: return "방에 들어가는 중…";
                 case CoopPhase.LeavingRoom: return "방을 나가는 중…";
+                case CoopPhase.RefreshingList: return "방 목록을 새로고침하는 중…";
+                case CoopPhase.OutsideLobby: return "로비 밖 (연결됨)";
                 case CoopPhase.LeavingLobby:
                 case CoopPhase.Disconnecting: return "이전 연결을 정리하는 중…";
                 case CoopPhase.Disconnected:

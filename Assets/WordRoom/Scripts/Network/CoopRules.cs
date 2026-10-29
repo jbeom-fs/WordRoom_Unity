@@ -51,6 +51,9 @@ namespace WordRoom.Network
         /// <summary>A participant gives up waiting this much later than the host's limit (the host normally stops the start first).</summary>
         public const float GuestGraceSeconds = 15f;
 
+        /// <summary>Real-time limit of the lobby's 새로고침 (leave, join the same lobby, its first full list); later it is reported as not finished.</summary>
+        public const float ListRefreshTimeoutSeconds = 15f;
+
         public static bool IsValidDifficulty(int d) => d >= 0 && d < DifficultyCount;
 
         /// <summary>A ready property value counted for `revision`.</summary>
