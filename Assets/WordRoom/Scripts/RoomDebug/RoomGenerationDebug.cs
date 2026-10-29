@@ -1135,11 +1135,15 @@ namespace WordRoom.RoomDebug
         // a missed one — the host too, through the same messages; only the host holds a coordinator (the authority, never
         // used for display). The single-player paths (StartGame/StartExperiment, arrow-key Move, solo Prepare and Enter)
         // never run in coop mode. After the common start the local player opens a door with E (the door slides up here;
-        // one Prepare request goes to the host) or walks through an open, prepared doorway (one Enter request): walking
-        // stays locked while this device's one request waits, the 3D view always centers on this player's confirmed
-        // room, and another player's change only updates rooms, signs, doors and the map (never this player's place or
-        // view). A refusal closes the door again or puts the player back inside its confirmed room. A display failure
-        // stops this device only; the session goes on for the others.
+        // one Prepare request goes to the host) or walks through an open, prepared doorway (one Enter request). A request
+        // never stops walking: a door waiting for its Prepare keeps its passage block until the confirmed state opens it;
+        // while an Enter waits, only the doorway between the room left and the room entered stays passable (the player
+        // moves in those two rooms, both shown, never on into a third one), and the 3D view keeps centering on the
+        // confirmed room. The confirmed room and the room the player really stands in may differ for that while; once the
+        // entry is confirmed, a player that has walked back is seen standing past the boundary and enters back with one
+        // more Enter. An accepted request never moves or turns the player; a refusal closes the door again (unless the
+        // confirmed state has it open) or, only when the player stands outside its confirmed room, puts it back inside.
+        // Another player's change only updates rooms, signs, doors and the map. A display failure stops this device only.
         bool coopMode;
         SessionCopy coopView;                // the confirmed state this device shows (independent copy of one revision)
         string coopHint;                     // the coop flow's message on screen; null = none
@@ -1148,7 +1152,8 @@ namespace WordRoom.RoomDebug
         Func<RequestKind, GridPos, Direction, long, bool> coopSend;   // set by the coop flow: sends one request to the host
         Func<string, string> coopName;       // display name of a PlayerId (set by the coop flow)
         double coopWaitNotice = 10;          // a request unanswered this long is told as delayed (never cancelled)
-        CoopPending pending;                 // this device's one request waiting for the host; null = none
+        CoopPending prepareWait;             // this device's door opening waiting for the host; null = none
+        CoopPending enterWait;               // this device's entry waiting for the host (at most one); null = none
         string coopShownWord;                // current word of the last shown copy (this player's confirmed room)
         string coopEndText;                  // what the end of the session looks like here; null while running
         string coopNote;                     // a short local message (a refusal), shown until coopNoteUntil
@@ -1158,7 +1163,7 @@ namespace WordRoom.RoomDebug
         const float NoteSeconds = 4f;
 
         /// <summary>
-        /// This device's request waiting for the host (one at a time). Its outcome is known only from the host — the
+        /// This device's request waiting for the host (one door opening and one entry at most). Its outcome is known only from the host — the
         /// answer, the answer to a query of the same RequestId, or this request's own confirmed change — never guessed
         /// from the world (an open door or a prepared room may be another player's). Accepted and Failed also wait until
         /// the shown copy has reached their revision.
@@ -1186,17 +1191,21 @@ namespace WordRoom.RoomDebug
         /// <summary>The revision of the state this device shows (coop; 0 before the initial state).</summary>
         public long CoopRevision => coopView?.Revision ?? 0;
 
-        /// <summary>This device's request whose outcome the host has not told yet (for a query of the same RequestId).</summary>
+        /// <summary>This device's oldest request whose outcome the host has not told yet (for a query of the same RequestId).</summary>
         public bool TryGetCoopUnanswered(out long requestId, out double sentAt)
         {
-            var p = pending;
-            requestId = p != null && p.Outcome == null ? p.RequestId : 0;
+            CoopPending p = null;
+            foreach (var w in new[] { prepareWait, enterWait })
+                if (w != null && w.Outcome == null && (p == null || w.RequestId < p.RequestId)) p = w;
+            requestId = p?.RequestId ?? 0;
             sentAt = p?.SentAt ?? 0;
-            return requestId != 0;
+            return p != null;
         }
 
-        /// <summary>The revision this device's waiting request needs the shown copy to reach (its known outcome); 0 when none.</summary>
-        public long CoopAwaitedRevision => pending != null && pending.Outcome != null ? pending.Target : 0;
+        /// <summary>The revision this device's waiting requests need the shown copy to reach (their known outcomes); 0 when none.</summary>
+        public long CoopAwaitedRevision => Math.Max(Awaited(prepareWait), Awaited(enterWait));
+
+        static long Awaited(CoopPending p) => p != null && p.Outcome != null ? p.Target : 0;
 
         /// <summary>A short message of the coop flow on this device (e.g. the host failing to bring a participant up to date).</summary>
         public void NotifyCoop(string text) => ShowNote(text);
@@ -1223,7 +1232,7 @@ namespace WordRoom.RoomDebug
             coopMode = true;
             coopView = null;
             coopWaiting = false;
-            pending = null;
+            prepareWait = enterWait = null;
             coopShownWord = coopEndText = coopNote = null;
             dataset = d;
             localPlayer = localPlayerId;
@@ -1398,50 +1407,53 @@ namespace WordRoom.RoomDebug
 
         /// <summary>
         /// Coop player mode, once per frame: the hint (the flow's message, the end of the session, a refusal, a delayed
-        /// request) and, while exploring with no request waiting, the door under the screen center — E slides it up here
-        /// and sends one Prepare request (same aim and E rules as single play, also with the map shown).
+        /// request) and, while exploring, the door under the screen center — E slides it up here and sends one Prepare
+        /// request (same aim and E rules as single play, also with the map shown). Walking goes on meanwhile.
         /// </summary>
         void UpdateCoopPlay()
         {
             var now = Time.realtimeSinceStartupAsDouble;
-            if (pending != null && !pending.Delayed && now - pending.SentAt >= coopWaitNotice) pending.Delayed = true;
+            foreach (var w in new[] { prepareWait, enterWait })
+                if (w != null && !w.Delayed && now - w.SentAt >= coopWaitNotice) w.Delayed = true;
             var text = coopHint ?? coopEndText;
             if (text == null && coopNote != null && now < coopNoteUntil) text = coopNote;
-            if (text == null && pending != null && pending.Delayed)
-                text = pending.Kind == RequestKind.Enter
-                    ? "호스트의 입장 확인이 늦어지고 있습니다. 계속 기다리거나 Esc로 메인 메뉴에 나갈 수 있습니다"
-                    : "호스트의 문 열기 확인이 늦어지고 있습니다. 계속 기다리거나 Esc로 메인 메뉴에 나갈 수 있습니다";
+            if (text == null && enterWait != null && enterWait.Delayed)
+                text = "호스트의 입장 확인이 늦어지고 있습니다. 다음 방으로는 확인 뒤에 갈 수 있습니다(Esc로 메인 메뉴에 나갈 수도 있습니다)";
+            else if (text == null && prepareWait != null && prepareWait.Delayed)
+                text = "호스트의 문 열기 확인이 늦어지고 있습니다. 확인 뒤에 그 문으로 지나갈 수 있습니다(Esc로 메인 메뉴에 나갈 수도 있습니다)";
             if (text == null && CanUseCoopDoors && controlled.TryGetAimedDoor(DoorReach, out var door) && worldView.CanOpen(door, out var id))
             {
-                if (controlled.InteractPressed && worldView.OpenDoor(id, out var side)) SendCoop(RequestKind.Prepare, side, id);   // prompt cleared
+                if (controlled.InteractPressed && worldView.OpenDoor(id, out var side)) SendCoop(RequestKind.Prepare, side, id);   // prompt cleared; the same door is no longer openable here
                 else text = "[E] 문 열기";
             }
             SetHint(text);
         }
 
+        /// <summary>
+        /// A door can be opened: exploring, no door opening of this device waiting, and no entry waiting (its confirmed
+        /// room — the opening's ExpectedFrom — is about to change).
+        /// </summary>
         bool CanUseCoopDoors =>
-            controlled != null && halt == null && !coopWaiting && pending == null && status == "running" && coopView != null && worldView != null && controlled.CanInteract;
+            controlled != null && halt == null && !coopWaiting && prepareWait == null && enterWait == null && status == "running" && coopView != null && worldView != null && controlled.CanInteract;
 
         /// <summary>
-        /// After every Update in coop: one entry at most, when this player's path in this frame went 0.15m past the
-        /// boundary of its confirmed room through a passable doorway — walking stops and one Enter request goes to the
-        /// host. Nothing is checked while a request of this device waits (no second entry), before the common start or
-        /// after the end.
+        /// After every Update in coop: one entry at most at a time — when this player stands 0.15m or more past a boundary of
+        /// its confirmed room through a passable doorway (also right after a confirmation, when it had walked back
+        /// meanwhile), one Enter request goes to the host and walking goes on. Nothing is checked while an entry of this
+        /// device waits (it is never sent twice), before the common start or after the end.
         /// </summary>
         void LateUpdateCoop()
         {
-            if (controlled == null || halt != null || coopWaiting || pending != null || status != "running" || coopView == null || worldView == null) return;
+            if (controlled == null || halt != null || coopWaiting || enterWait != null || status != "running" || coopView == null || worldView == null) return;
             if (controlled != player || !controlled.Placed) return;              // TrackPlayer releases it next frame
-            var to = controlled.transform.position;
-            var from = lastPosition;
-            lastPosition = to;
-            if (worldView.TryDetectEntry(from, to, out var side)) SendCoop(RequestKind.Enter, side, default);
+            if (worldView.TryGetPassedSide(controlled.transform.position, true, out var side)) SendCoop(RequestKind.Enter, side, default);
         }
 
         /// <summary>
-        /// One request of this device to the host, from its confirmed room (sent as ExpectedFrom). Walking stops until
-        /// the answer (look, gravity, Escape and the map go on); nothing is shown as done before the host confirms it.
-        /// A request that cannot be sent is handled like a refusal at once (the door closes again, the player goes back).
+        /// One request of this device to the host, from its confirmed room (sent as ExpectedFrom — no entry of this device
+        /// waits then, so that room is current). Walking is never stopped for it; an entry limits the passable doorways to
+        /// the one it went through until its outcome. Nothing is shown as done before the host confirms it. A request that
+        /// cannot be sent is handled like a refusal at once (the door closes again; a player outside goes back).
         /// </summary>
         void SendCoop(RequestKind kind, Direction side, RoomConnection door)
         {
@@ -1451,8 +1463,12 @@ namespace WordRoom.RoomDebug
                 RequestId = ++nextRequest, Kind = kind, Side = side, From = from, To = from.Add(Directions.Offset(side)), Door = door,
                 SentAt = Time.realtimeSinceStartupAsDouble,
             };
-            controlled.SetMovementLocked(true);
-            pending = p;
+            if (kind == RequestKind.Enter)
+            {
+                enterWait = p;
+                worldView.LimitPassage(RoomConnection.Between(p.From, p.To));   // the two rooms only, until the outcome
+            }
+            else prepareWait = p;
             coopNote = null;
             SetHint(null);
             var sent = false;
@@ -1472,13 +1488,13 @@ namespace WordRoom.RoomDebug
 
         /// <summary>
         /// The host's outcome of one of this device's requests — its answer or the answer to a query of the same RequestId.
-        /// Only the waiting request counts and only its first known outcome (a later, repeated or other answer changes
-        /// nothing; a completed request's late answer never touches a newer one). Pending keeps waiting.
+        /// Only a waiting request counts and only its first known outcome (a later, repeated or other answer changes
+        /// nothing; a completed request's late answer never touches a newer one or the other kind). Pending keeps waiting.
         /// </summary>
         public void ApplyCoopReply(long requestId, RequestOutcome outcome, long revision, string reason)
         {
-            var p = pending;
-            if (!coopMode || p == null || p.RequestId != requestId || p.Outcome != null || outcome == RequestOutcome.Pending) return;
+            var p = prepareWait != null && prepareWait.RequestId == requestId ? prepareWait : enterWait != null && enterWait.RequestId == requestId ? enterWait : null;
+            if (!coopMode || p == null || p.Outcome != null || outcome == RequestOutcome.Pending) return;
             p.Outcome = outcome;
             p.Target = outcome == RequestOutcome.Accepted || outcome == RequestOutcome.Failed ? revision : 0;
             p.Reason = !string.IsNullOrEmpty(reason) ? reason
@@ -1486,54 +1502,57 @@ namespace WordRoom.RoomDebug
             TryCompletePending();
         }
 
-        /// <summary>
-        /// Ends the waiting request once its outcome is known and, for Accepted or Failed, the shown copy has reached that
-        /// revision: Refused or Unknown (nothing changed at the host) closes the door again or puts the player back inside
-        /// its confirmed room; Accepted needs, for an entry, this player's confirmed room to be the entered one, shown, with
-        /// the floor under the player that room's; Failed (the host's state after an error, now shown) follows that state —
-        /// an entry stands if this player's confirmed room is the entered one, otherwise the player goes back; a door stays
-        /// open only if the state has it open. Only this request's walking lock is lifted (menus keep their own block);
-        /// walking resumes where the player stands, nothing is re-placed or turned.
-        /// </summary>
+        /// <summary>Ends each waiting request whose outcome is known and shown (see Complete); the door opening and the entry independently.</summary>
         void TryCompletePending()
         {
-            var p = pending;
-            if (p == null || coopView == null || p.Outcome == null) return;
+            prepareWait = Complete(prepareWait);
+            enterWait = Complete(enterWait);
+        }
+
+        /// <summary>
+        /// One waiting request, ended once its outcome is known and, for Accepted or Failed, the shown copy has reached that
+        /// revision (it stays waiting otherwise and is returned). A door opening: refused, unknown or failed closes the door
+        /// again unless the shown state has it open; accepted needs nothing (the view opens the passage). An entry: the
+        /// passage limit ends (the confirmed room's doorways follow the shown state again); confirmed into the entered room,
+        /// the HUD shows it — the player is never moved or turned, also when it stands elsewhere now (it walked back: the
+        /// next frame enters back from there); not confirmed (refused, unknown, or failed without that move), the player
+        /// goes back inside its confirmed room only when it stands outside it, once, facing kept. Walking is never locked
+        /// or unlocked here (menus, the start gate and the end keep their own locks).
+        /// </summary>
+        CoopPending Complete(CoopPending p)
+        {
+            if (p == null || coopView == null || p.Outcome == null) return p;
             var outcome = p.Outcome.Value;
-            if ((outcome == RequestOutcome.Accepted || outcome == RequestOutcome.Failed) && coopView.Revision < p.Target) return;   // that revision is not shown yet
-            pending = null;
-            if (controlled == null || halt != null) return;
+            if ((outcome == RequestOutcome.Accepted || outcome == RequestOutcome.Failed) && coopView.Revision < p.Target) return p;   // that revision is not shown yet
+            if (p.Kind == RequestKind.Enter && worldView != null) worldView.LimitPassage(null);
+            if (controlled == null || halt != null) return null;
             if (outcome != RequestOutcome.Accepted)
             {
                 Debug.Log($"[협동] 요청 {p.RequestId} {(outcome == RequestOutcome.Failed ? "처리 오류" : "거절")}: {p.Reason}");
                 var what = p.Kind == RequestKind.Prepare ? "문을 열 수 없습니다" : "입장할 수 없습니다";
                 ShowNote(outcome == RequestOutcome.Failed ? $"{what} — {p.Reason}. 호스트의 현재 상태로 맞췄습니다" : $"{what} — {p.Reason}");
             }
-            var entered = p.Kind == RequestKind.Enter && coopView.PlayerPosition(localPlayer) == p.To;
             if (p.Kind == RequestKind.Prepare)
             {
                 if (outcome != RequestOutcome.Accepted && worldView != null) worldView.RevertOpening(p.Door);   // stays open when the shown state has it open
+                return null;
             }
-            else if (outcome == RequestOutcome.Accepted || (outcome == RequestOutcome.Failed && entered))
+            var here = coopView.PlayerPosition(localPlayer);
+            if (here == p.To)
             {
-                var here = coopView.PlayerPosition(localPlayer);
-                string failure = null;
-                if (!entered) failure = $"확정된 위치 {here}가 입장한 방 {p.To}와 다릅니다";
-                else if (!worldView.TryGetShownRoom(here, out var room)) failure = $"도착 방 {here}이 3D로 표시되지 않았습니다";
-                else controlled.IsOnFloorOf(room, out failure);
-                if (failure != null)
-                {
-                    Halt(failure);
-                    return;
-                }
-                SetHudWords(coopShownWord, hudTarget);                             // entry confirmed and shown: new current room, same target
+                SetHudWords(coopShownWord, hudTarget);                             // the entered room is the confirmed one now (where the player stands is not touched)
+                return null;
             }
-            else if (!ReturnInside(p.Side)) return;
-            lastPosition = controlled.transform.position;
-            controlled.SetMovementLocked(status != "running");
+            if (outcome == RequestOutcome.Accepted)
+            {
+                Halt($"입장이 확정됐지만 확정 위치 {here}가 입장한 방 {p.To}와 다릅니다");   // its own change moved it: should not happen
+                return null;
+            }
+            if (worldView != null && worldView.TryGetPassedSide(controlled.transform.position, false, out var side)) ReturnInside(side);   // only when it really stands outside
+            return null;
         }
 
-        /// <summary>An entry that was not confirmed: the player goes back inside its confirmed room, by the doorway it crossed (facing kept).</summary>
+        /// <summary>An entry that was not confirmed: the player, standing outside its confirmed room toward `side`, goes back inside by that doorway (facing kept).</summary>
         bool ReturnInside(Direction side)
         {
             var here = coopView.PlayerPosition(localPlayer);
@@ -1573,11 +1592,12 @@ namespace WordRoom.RoomDebug
             }
             SyncCoopMap(c, next);
             AdoptCoopState(next);
-            if (pending != null && pending.Outcome == null && c.PlayerId == localPlayer && c.RequestId == pending.RequestId)
-            {
-                pending.Outcome = RequestOutcome.Accepted;                         // this request's own confirmed change
-                pending.Target = c.Revision;
-            }
+            foreach (var w in new[] { prepareWait, enterWait })
+                if (w != null && w.Outcome == null && c.PlayerId == localPlayer && c.RequestId == w.RequestId)
+                {
+                    w.Outcome = RequestOutcome.Accepted;                           // this request's own confirmed change
+                    w.Target = c.Revision;
+                }
             TryCompletePending();
             return CoopChangeResult.Applied;
         }
@@ -1600,7 +1620,7 @@ namespace WordRoom.RoomDebug
             }
             if (copy.Revision <= coopView.Revision) return true;                  // nothing newer
             var mine = coopView.PlayerPosition(localPlayer);
-            var entering = pending != null && pending.Kind == RequestKind.Enter && theirs.Position == pending.To;
+            var entering = enterWait != null && theirs.Position == enterWait.To;
             if (theirs.Position != mine && !entering)
             {
                 failure = $"내 확정 위치가 {mine}에서 {theirs.Position}로 설명 없이 바뀌었습니다";
@@ -1627,8 +1647,9 @@ namespace WordRoom.RoomDebug
         }
 
         /// <summary>
-        /// The shown copy around this player's confirmed room (never moved for another player's change). A display failure
-        /// stops this device only. After the end, walking stops (look and Escape go on) once no entry of this device waits.
+        /// The shown copy around this player's confirmed room (never moved for another player's change; the room left and
+        /// the room entered by a waiting entry are both within the display radius, so the floor under the player stays). A
+        /// display failure stops this device only. After the end, walking stops (look and Escape go on).
         /// </summary>
         void ShowCoopState()
         {
@@ -1651,7 +1672,7 @@ namespace WordRoom.RoomDebug
             }
             shownRadius = radius;
             coopShownWord = snapshot.CurrentWord;
-            if (status != "running" && pending == null) controlled.SetMovementLocked(true);
+            if (status != "running") controlled.SetMovementLocked(true);   // the end: no more exploring (a waiting entry still completes)
         }
 
         /// <summary>The explored map follows the shown copy: the change itself, or the whole copy (full state, late tracking, or a map gap).</summary>

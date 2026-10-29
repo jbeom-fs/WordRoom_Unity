@@ -93,6 +93,7 @@ namespace WordRoom.World
         bool ready;
         GridPos? center;                      // current room of the last shown snapshot
         RoomViewSnapshot shown;               // last shown snapshot: prepared rooms and confirmed doors (session data, not pooled)
+        RoomConnection? onlyPassage;          // while set, no other doorway lets the player through (an entry awaiting confirmation)
 
         // Roots this component created itself (never written to the Inspector fields), reused across experiments.
         Transform autoRoomRoot;
@@ -114,6 +115,7 @@ namespace WordRoom.World
             ready = false;
             center = null;
             shown = null;                                 // the previous session's preparation and door copies
+            onlyPassage = null;
             HandOverIfUserRoot(ref autoRoomRoot);         // before any cleanup or root resolving, also on a setting error
             HandOverIfUserRoot(ref autoDoorRoot);
 
@@ -369,8 +371,42 @@ namespace WordRoom.World
         /// (UpdatePassages runs every frame and follows this).
         /// </summary>
         bool IsPassable(RoomConnection id, GridPos c) =>
+            (onlyPassage == null || onlyPassage.Value == id) &&
             doors.TryGetValue(id, out var door) && door != null && door.Active && door.FullyOpen &&
             JoinsCurrentToShown(id, c) && shown != null && shown.Door(id) == DoorState.Open && shown.IsPrepared(id.A == c ? id.B : id.A);
+
+        /// <summary>
+        /// While an entry waits for its confirmation (coop): only the doorway `only` between the room it left and the room
+        /// it entered stays passable (when it is passable at all), every other passage block is on — the player moves freely
+        /// in those two rooms, never on into a third one before the confirmation. Null lifts the limit.
+        /// </summary>
+        public void LimitPassage(RoomConnection? only)
+        {
+            onlyPassage = only;
+            UpdatePassages();
+        }
+
+        /// <summary>
+        /// Whether the player's center at `position` stands EntryDepth (0.15m) or more past a boundary of the current room
+        /// (the confirmed one), and on which side — with `passableOnly`, only through a doorway passable now. A position
+        /// test, not a crossing in one frame: a player that is already in the neighbor when the current room changes is
+        /// seen there too. EntryDepth on each side keeps standing on the threshold from flipping back and forth.
+        /// </summary>
+        public bool TryGetPassedSide(Vector3 position, bool passableOnly, out Direction side)
+        {
+            side = default;
+            if (!ready || center == null) return false;
+            var c = center.Value;
+            var co = RoomOrigin(c);
+            foreach (var d in Directions.GenerationOrder)
+            {
+                if (Vector3.Dot(position - co, RoomPrefabLayout.Normal(d)) - spacing * 0.5f < EntryDepth) continue;
+                if (passableOnly && !IsPassable(RoomConnection.Of(c, d), c)) continue;
+                side = d;
+                return true;
+            }
+            return false;
+        }
 
         bool JoinsCurrentToShown(RoomConnection id, GridPos c)
         {
