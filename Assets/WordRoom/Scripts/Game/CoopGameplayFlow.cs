@@ -166,6 +166,9 @@ namespace WordRoom.Game
             if (!placedOk) return;
             TakePlayMessages();
             var now = Time.realtimeSinceStartupAsDouble;
+            TakePoses(now);                                                 // display only: apart from every logical step below
+            SendPose(now);
+            DropLeftRobots();
             if (s.IsHost)
             {
                 if (hostStopReason != null) WatchStop(now);                // no more requests; only the stop's delivery
@@ -961,6 +964,7 @@ namespace WordRoom.Game
                 fixedSettings = world.Settings();                          // kept as this device's independent copy (display only; never generates)
                 initialRevision = hostHead = world.Copy.Revision;         // what every placed device shows first
                 game.SetCoopPlay(SendRequest, CoopRules.RequestWaitNoticeSeconds, session.ParticipantName);
+                game.BeginRemotePlayers(world.PlayerIds);                 // the fixed participants, in the start's fixed order
             }
             placedOk = failure == null;
             session.ReportPlaced(world?.Copy.SessionId, world?.Copy.Revision ?? 0, placedOk, failure);
@@ -1017,6 +1021,68 @@ namespace WordRoom.Game
             ended = true;
             game.SetCoopHint(null);
             game.HaltCoop(reason);
+            if (game.RemotePlayers != null) game.RemotePlayers.Clear();   // the coop game is gone: nobody else is shown any more
+        }
+
+        // ---- other participants' robots (display only; never a logical change) ------------------------------------------
+        int poseSeq;
+        double poseSentAt = double.NegativeInfinity;
+        Vector3 posePosition;
+        float poseYaw;
+        int posePlacement = -1;
+        bool poseWarned;
+
+        /// <summary>
+        /// This device's body pose to the others: every PoseSendSeconds while it moves or turns, every PoseIdleSeconds while
+        /// it stands still (so it is never taken for lost), at once after a placement change. Unreliable; a failed send is
+        /// simply replaced by the next one on the same schedule (never every frame). Also during a waiting entry, a refusal's
+        /// return and after a stop — always where the body really is.
+        /// </summary>
+        void SendPose(double now)
+        {
+            if (!game.TryGetCoopLocalPose(out var position, out var yaw, out var placement)) return;
+            var moved = placement != posePlacement || (position - posePosition).sqrMagnitude > CoopRules.PoseMoveEpsilon * CoopRules.PoseMoveEpsilon ||
+                        Mathf.Abs(Mathf.DeltaAngle(yaw, poseYaw)) > CoopRules.PoseTurnEpsilon;
+            if (now - poseSentAt < (moved ? CoopRules.PoseSendSeconds : CoopRules.PoseIdleSeconds)) return;
+            poseSentAt = now;
+            var content = CoopProtocol.Encode(new CoopProtocol.Pose
+            {
+                Attempt = entry.Attempt, SessionId = game.CoopSessionId, Seq = ++poseSeq, Placement = placement,
+                X = position.x, Y = position.y, Z = position.z, Yaw = yaw,
+            });
+            if (!session.SendPose(content)) return;
+            posePosition = position;
+            poseYaw = yaw;
+            posePlacement = placement;
+        }
+
+        /// <summary>
+        /// Received poses of the other participants (their real sender checked by CoopSession): checked for form, start and
+        /// session, then handed to the robots (which keep only newer ones per participant). A bad pose is dropped (told once).
+        /// </summary>
+        void TakePoses(double now)
+        {
+            var robots = game.RemotePlayers;
+            while (session.TryTakePose(out var m))
+            {
+                if (!CoopProtocol.TryDecode(m.Content, out CoopProtocol.Pose pose, out var error))
+                {
+                    if (!poseWarned) Debug.LogWarning($"[협동] 참가자 {m.Sender}의 위치 자료를 무시했습니다: {error}");
+                    poseWarned = true;
+                    continue;
+                }
+                if (robots == null || pose.Attempt != entry.Attempt || pose.SessionId != game.CoopSessionId) continue;
+                robots.Apply(CoopRules.PlayerIdOf(m.Sender), pose.Seq, pose.Placement, new Vector3(pose.X, pose.Y, pose.Z), pose.Yaw, now);
+            }
+        }
+
+        /// <summary>A participant that left the room is no longer shown (its robot and poses go; it never comes back in this game).</summary>
+        void DropLeftRobots()
+        {
+            var robots = game.RemotePlayers;
+            if (robots == null) return;
+            foreach (var actor in entry.Actors)
+                if (actor != entry.LocalActor && !session.IsInRoom(actor)) robots.Remove(CoopRules.PlayerIdOf(actor));
         }
     }
 }

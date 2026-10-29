@@ -82,6 +82,8 @@ namespace WordRoom.Network
         CoopProtocol.Go go;
         double startedAt;
         readonly Queue<PlayMessage> play = new Queue<PlayMessage>();
+        readonly Queue<PlayMessage> poses = new Queue<PlayMessage>();   // display poses, apart from the ordered logical queue
+        const int MaxPoses = 64;                                        // a few frames of every participant; older ones are dropped first
 
         /// <summary>Raised on the main thread after every change of stage, entry or notice.</summary>
         public event Action Changed;
@@ -210,6 +212,7 @@ namespace WordRoom.Network
             worldContent = null;
             go = null;
             play.Clear();
+            poses.Clear();
             Raise();
         }
 
@@ -416,6 +419,36 @@ namespace WordRoom.Network
             return PhotonNetwork.RaiseEvent(code, content, new RaiseEventOptions { TargetActors = new[] { actor } }, SendOptions.SendReliable);
         }
 
+        /// <summary>
+        /// This device's body pose to the other participants: unreliable (a lost one is replaced by the next; never queued
+        /// with the logical messages). False when it could not be sent.
+        /// </summary>
+        public bool SendPose(object[] content)
+        {
+            if (!InPlay || leaving) return false;
+            return PhotonNetwork.RaiseEvent(CoopProtocol.PoseCode, content, new RaiseEventOptions { Receivers = ReceiverGroup.Others }, SendOptions.SendUnreliable);
+        }
+
+        /// <summary>The next received pose (oldest first; at most MaxPoses kept), for the game side to check and show.</summary>
+        public bool TryTakePose(out PlayMessage message)
+        {
+            if (poses.Count > 0)
+            {
+                message = poses.Dequeue();
+                return true;
+            }
+            message = default;
+            return false;
+        }
+
+        /// <summary>Poses only from another participant of this start (by the event's real sender), while playing.</summary>
+        void HandlePose(int sender, object content)
+        {
+            if (!InPlay || leaving || sender == PhotonNetwork.LocalPlayer.ActorNumber || Array.IndexOf(entry.Actors, sender) < 0) return;
+            if (poses.Count >= MaxPoses) poses.Dequeue();
+            poses.Enqueue(new PlayMessage(CoopProtocol.PoseCode, sender, content));
+        }
+
         /// <summary>Requests reach only the host of this start, and only from a participant of it (by the event's real sender).</summary>
         void HandleToHost(byte code, int sender, object content)
         {
@@ -502,6 +535,7 @@ namespace WordRoom.Network
                 case CoopProtocol.ChangeCode:
                 case CoopProtocol.CopyCode:
                 case CoopProtocol.StopCode: HandleFromHost(e.Code, e.Sender, e.CustomData); break;
+                case CoopProtocol.PoseCode: HandlePose(e.Sender, e.CustomData); break;
             }
         }
 
@@ -616,6 +650,7 @@ namespace WordRoom.Network
             stage = CoopStage.Aborted;
             hostAttempt = null;
             play.Clear();                                          // nothing of the stopped game is used any more
+            poses.Clear();
             entryPending = entryLost = false;
             Debug.LogWarning($"[협동] 게임 시작 중단: {AbortReason}");
             ReopenRoomIfMaster();

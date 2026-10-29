@@ -177,7 +177,8 @@ namespace WordRoom.EditorTools
         /// <summary>
         /// Only the map of the existing Gameplay scene: the MapCanvas prefab (built only when missing, with its word pool),
         /// one placed instance (inactive when new), the MapScreen references, and the game menu's and result screen's
-        /// links to it when those are empty. Nothing else is checked or changed (no other UI, no value move, no
+        /// links to it when those are empty. An existing prefab only gets the coop participants' marks it lacks
+        /// (EnsureMapRemoteMarkers). Nothing else is checked or changed (no other UI, no value move, no
         /// materials); Gameplay is never made or copied here.
         /// </summary>
         [MenuItem("WordRoom/지도 화면 구성")]
@@ -192,13 +193,69 @@ namespace WordRoom.EditorTools
             {
                 var temporary = false;
                 var prefab = LoadOrBuild(ArchiveUiBuilder.MapPrefabPath, ArchiveUiBuilder.BuildMapCanvas, typeof(MapView), notes, saved, ref temporary);
+                EnsureMapRemoteMarkers(notes, saved);
                 var start = notes.Count;
                 var scene = EditorSceneManager.OpenScene(GameplayPath, OpenSceneMode.Single);
                 var games = Object.FindObjectsByType<RoomGenerationDebug>(FindObjectsInactive.Include, FindObjectsSortMode.None);
                 if (games.Length != 1) throw new InvalidOperationException($"Gameplay 씬의 RoomGenerationDebug가 {games.Length}개입니다(하나여야 함)");
                 SetupMap(games[0], games[0].GetComponent<PauseMenu>(), prefab, scene, notes);
+                foreach (var v in Object.FindObjectsByType<MapView>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+                    if (v.gameObject.scene == scene && !HasRemoteMarkers(v))           // a scene override emptied them, or not the prefab's instance
+                        notes.Add($"{Warning}Gameplay의 '{v.name}' MapView에 원격 마커(remoteMarkers)가 연결되지 않아 협동 지도에 다른 참가자가 보이지 않습니다(씬은 바꾸지 않음). 인스펙터에서 연결하거나 프리팹 값으로 되돌리세요");
                 SaveIfChanged(scene, GameplayPath, start, notes, saved);
             });
+        }
+
+        /// <summary>Any remote mark connected to the view (also user-made ones).</summary>
+        static bool HasRemoteMarkers(MapView view)
+        {
+            var p = new SerializedObject(view).FindProperty("remoteMarkers");
+            if (p == null) return false;
+            for (var i = 0; i < p.arraySize; i++)
+                if (p.GetArrayElementAtIndex(i).objectReferenceValue != null) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Adds only the other coop participants' marks (Viewport/RemotePlayer0.., under the player mark) to the saved
+        /// MapCanvas prefab when its MapView has none connected and the viewport has no such object; colors, fonts, sizes,
+        /// layout and every other part of the prefab stay as they are. Never rebuilds the prefab.
+        /// </summary>
+        static void EnsureMapRemoteMarkers(List<string> notes, List<string> saved)
+        {
+            var path = ArchiveUiBuilder.MapPrefabPath;
+            var contents = PrefabUtility.LoadPrefabContents(path);
+            try
+            {
+                var view = contents.GetComponent<MapView>();
+                if (view == null || HasRemoteMarkers(view)) return;            // already there (also user-made and connected)
+                var so = new SerializedObject(view);
+                var player = so.FindProperty("playerMarker").objectReferenceValue as MapMarker;
+                var viewport = player != null ? player.rectTransform.parent as RectTransform : null;
+                if (viewport == null)
+                {
+                    notes.Add($"{Warning}{path}의 MapView에 플레이어 마커(또는 그 부모)가 없어 원격 마커를 추가하지 않았습니다(지도의 다른 기능은 그대로). remoteMarkers를 직접 연결하세요");
+                    return;
+                }
+                for (var i = 0; i < ArchiveUiBuilder.RemoteMapMarkerCount; i++)
+                {
+                    var name = $"{ArchiveUiBuilder.RemoteMapMarkerPrefix}{i}";
+                    if (viewport.Find(name) == null) continue;
+                    notes.Add($"{Warning}{path}의 {viewport.name}/{name}가 있지만 MapView.remoteMarkers에 연결되지 않았습니다(바꾸지 않음, 중복 생성 안 함). 직접 연결하세요");
+                    return;
+                }
+                var marks = ArchiveUiBuilder.AddRemoteMapMarkers(viewport, player.rectTransform.GetSiblingIndex());   // under the player's own mark
+                ArchiveUiBuilder.SetRemoteMapMarkers(so, marks);
+                so.ApplyModifiedPropertiesWithoutUndo();
+                PrefabUtility.SaveAsPrefabAsset(contents, path, out var ok);
+                if (!ok) throw new InvalidOperationException($"{path}에 원격 마커를 저장하지 못했습니다");
+                if (!saved.Contains(path)) saved.Add(path);
+                notes.Add($"{path}: {viewport.name}/{ArchiveUiBuilder.RemoteMapMarkerPrefix}0~{marks.Length - 1}(다른 참가자 마커)와 MapView.remoteMarkers 추가 — 다른 항목은 그대로");
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(contents);
+            }
         }
 
         /// <summary>Shared frame of the menus: checks, scene save prompt, log of changes and saved assets, reopening the previous scene.</summary>

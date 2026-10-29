@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
@@ -87,6 +88,8 @@ namespace WordRoom.RoomDebug
         [SerializeField] PlayHint hint;
         [Tooltip("화면 좌상단 현재·목표 단어 HUD. 1인칭 플레이어가 배치된 동안만 보입니다. 비우면 같은 오브젝트의 것을 찾고, 없으면 HUD 없이 진행합니다.")]
         [SerializeField] WordRoomHud hud;
+        [Tooltip("협동에서 다른 참가자의 로봇 외형을 표시합니다(표시 전용). 비우면 같은 오브젝트의 것을 찾고, 없으면 다른 참가자를 표시하지 않습니다.")]
+        [SerializeField] RemotePlayers remotePlayers;
 
         [Tooltip("진행 정지·플레이어 미배치 안내 뒤에 붙는 다음 행동 안내. 메뉴로 실행하는 씬은 메인 메뉴 복귀를 안내합니다.")]
         [SerializeField] string haltAdvice = "새 실험을 시작하세요";
@@ -218,6 +221,7 @@ namespace WordRoom.RoomDebug
             if (worldView == null) worldView = GetComponent<RoomWorldView>();
             if (hint == null) hint = GetComponent<PlayHint>();
             if (hud == null) hud = GetComponent<WordRoomHud>();
+            if (remotePlayers == null) remotePlayers = GetComponent<RemotePlayers>();
             if (player != null) player.RememberViewHome();   // also for an inactive player, before any debug camera move
         }
 
@@ -1210,6 +1214,48 @@ namespace WordRoom.RoomDebug
         /// <summary>A short message of the coop flow on this device (e.g. the host failing to bring a participant up to date).</summary>
         public void NotifyCoop(string text) => ShowNote(text);
 
+        // ---- other participants' robots (display only) --------------------------------------------------------------
+        int coopPlacement;                   // grows whenever this player is placed or put back rather than walking
+        bool remoteMissingLogged;
+
+        /// <summary>The other participants' robots of this scene (null when the scene has none: they are simply not shown).</summary>
+        public RemotePlayers RemotePlayers => remotePlayers;
+
+        /// <summary>
+        /// The game's fixed participants (fixed order, the same on every device): the robots of every other one are shown
+        /// from now on, within the rooms this device shows. Never this device's own player.
+        /// </summary>
+        public void BeginRemotePlayers(IReadOnlyList<string> fixedParticipants)
+        {
+            if (remotePlayers == null)
+            {
+                if (!remoteMissingLogged)
+                {
+                    remoteMissingLogged = true;
+                    Debug.LogWarning("[협동] RemotePlayers가 없어 다른 참가자 외형을 표시하지 않습니다(플레이는 계속). WordRoom/협동 로봇 외형 구성 메뉴로 Gameplay에 연결하세요.", this);
+                }
+                return;
+            }
+            remotePlayers.Begin(fixedParticipants, localPlayer, worldView != null ? (Func<Vector3, bool>)worldView.IsShownAt : null);
+        }
+
+        /// <summary>
+        /// This device's body as the others should see it: the placed player's real feet position and heading (the
+        /// camera's pitch is not part of it), and how many times it was placed or put back. Also while an entry waits or
+        /// after a stop (it stands where it is); false when no player is placed for this coop game.
+        /// </summary>
+        public bool TryGetCoopLocalPose(out Vector3 position, out float yaw, out int placement)
+        {
+            position = default;
+            yaw = 0f;
+            placement = coopPlacement;
+            if (!coopMode || coopView == null || controlled == null || controlled != player || !controlled.isActiveAndEnabled) return false;
+            var t = controlled.transform;
+            position = t.position;
+            yaw = t.eulerAngles.y;
+            return true;
+        }
+
         /// <summary>
         /// The coop flow's part for play: how a request reaches the host (false = it could not be sent), how long an
         /// unanswered request waits before it is told as delayed, and the display name of a PlayerId.
@@ -1234,6 +1280,8 @@ namespace WordRoom.RoomDebug
             coopWaiting = false;
             prepareWait = enterWait = null;
             coopShownWord = coopEndText = coopNote = null;
+            coopPlacement = 0;
+            if (remotePlayers != null) remotePlayers.Clear();            // nothing of an earlier game is shown again
             dataset = d;
             localPlayer = localPlayerId;
             session = null;
@@ -1355,6 +1403,7 @@ namespace WordRoom.RoomDebug
                 return false;
             }
             coopWaiting = true;
+            coopPlacement++;                                               // placed, not walked: others never glide to here
             controlled.SetMovementLocked(true);                            // the coop gate: look yes, walking and doors not yet
             lastPosition = controlled.transform.position;
             coopShownWord = snapshot.CurrentWord;
@@ -1560,7 +1609,11 @@ namespace WordRoom.RoomDebug
             if (worldView == null || !worldView.TryGetShownRoom(here, out var room) || !worldView.TryGetInsidePoint(here, side, ReturnDepth, out var point))
                 failure = $"확정된 방 {here}이 3D로 표시되지 않았습니다";
             else controlled.MoveOnto(room, point, out failure);
-            if (failure == null) return true;
+            if (failure == null)
+            {
+                coopPlacement++;                                           // put back, not walked: others never glide across the wall
+                return true;
+            }
             Halt($"입장이 확정되지 않아 원래 방으로 돌아가지 못했습니다 — {failure}");
             return false;
         }

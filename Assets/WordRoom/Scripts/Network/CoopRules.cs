@@ -67,6 +67,19 @@ namespace WordRoom.Network
         /// <summary>Coop play: how many times the whole state is sent to (or asked for by) one device behind, or an outcome queried, before it is reported as failed.</summary>
         public const int RecoveryAttempts = 3;
 
+        /// <summary>
+        /// Coop pose (display only, unreliable): while the body moves or turns, one pose per this many seconds (10 a
+        /// second: smooth enough behind a short interpolation delay, small next to the logical messages).
+        /// </summary>
+        public const float PoseSendSeconds = 0.1f;
+
+        /// <summary>Coop pose: while the body stands still, one pose per this many seconds, so a still player is never taken for a lost one.</summary>
+        public const float PoseIdleSeconds = 1f;
+
+        /// <summary>Coop pose: a move (meters) or turn (degrees) smaller than this since the last sent pose counts as standing still.</summary>
+        public const float PoseMoveEpsilon = 0.02f;
+        public const float PoseTurnEpsilon = 1f;
+
         /// <summary>Real-time limit of the lobby's 새로고침 (leave, join the same lobby, its first full list); later it is reported as not finished.</summary>
         public const float ListRefreshTimeoutSeconds = 15f;
 

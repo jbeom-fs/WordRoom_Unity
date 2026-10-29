@@ -226,7 +226,7 @@ namespace WordRoom.EditorTools
         /// Map canvas (order 150: above the HUD and hint, below the game menu and the result). A framed walnut panel
         /// 48 units inside the screen: header (지도, controls hint, 현재 위치, 닫기), the map viewport (#211A16 background
         /// catching wheel and drag, RectMask2D, MapViewportInput) holding the MapGraphic, the word pool and the player
-        /// marker, and a legend. Buttons are outside the viewport, so pressing them never drags the map. MapView on the
+        /// marker (with the other coop participants' marks under it), and a legend. Buttons are outside the viewport, so pressing them never drags the map. MapView on the
         /// root holds the parts. The root is saved active; the scene instance is placed inactive (MapScreen opens it).
         /// </summary>
         public static GameObject BuildMapCanvas()
@@ -284,6 +284,7 @@ namespace WordRoom.EditorTools
             marker.color = new Color32(0x72, 0xFF, 0xD5, 255);                        // #72FFD5 bright mint
             marker.raycastTarget = false;
             marker.enabled = false;
+            var remotes = AddRemoteMapMarkers(viewport, markerRect.GetSiblingIndex());   // under the player's own mark
 
             var legend = NewRect("Legend", panel);
             legend.anchorMin = new Vector2(0f, 0f);
@@ -320,8 +321,45 @@ namespace WordRoom.EditorTools
             var pool = so.FindProperty("words");
             pool.arraySize = words.Length;
             for (var i = 0; i < words.Length; i++) pool.GetArrayElementAtIndex(i).objectReferenceValue = words[i];
+            SetRemoteMapMarkers(so, remotes);
             so.ApplyModifiedPropertiesWithoutUndo();
             return root;
+        }
+
+        public const string RemoteMapMarkerPrefix = "RemotePlayer";
+
+        /// <summary>The other coop participants a map can show (every participant but this device's own).</summary>
+        public static int RemoteMapMarkerCount => WordRoom.Network.CoopRules.MaxPlayers - 1;
+
+        /// <summary>
+        /// The marks of the other coop participants ("RemotePlayer0".., the player mark's triangle and size, hidden, never
+        /// a raycast target), placed from sibling `firstSibling` on so they stay under the player's own mark. MapView sets
+        /// their color and size at play time.
+        /// </summary>
+        public static MapMarker[] AddRemoteMapMarkers(RectTransform viewport, int firstSibling)
+        {
+            var marks = new MapMarker[RemoteMapMarkerCount];
+            for (var i = 0; i < marks.Length; i++)
+            {
+                var r = NewRect($"{RemoteMapMarkerPrefix}{i}", viewport);
+                r.anchorMin = r.anchorMax = r.pivot = new Vector2(0.5f, 0.5f);
+                r.sizeDelta = new Vector2(32f, 32f);
+                r.SetSiblingIndex(Mathf.Min(firstSibling + i, viewport.childCount - 1));
+                var m = r.gameObject.AddComponent<MapMarker>();
+                m.color = Color.white;                                                  // the participant's color is set at play time
+                m.raycastTarget = false;
+                m.enabled = false;
+                marks[i] = m;
+            }
+            return marks;
+        }
+
+        /// <summary>MapView's remote mark slots (applied by the caller).</summary>
+        public static void SetRemoteMapMarkers(SerializedObject view, MapMarker[] marks)
+        {
+            var p = view.FindProperty("remoteMarkers");
+            p.arraySize = marks.Length;
+            for (var i = 0; i < marks.Length; i++) p.GetArrayElementAtIndex(i).objectReferenceValue = marks[i];
         }
 
         /// <summary>A 24×24 swatch and its label; the swatch is returned so the map colors can drive it.</summary>

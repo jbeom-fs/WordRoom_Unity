@@ -22,6 +22,8 @@ namespace WordRoom.Game
     /// the map; this is not the menu block, so it never lifts a menu's or the result's block, and the generation's
     /// walking lock stays as it is. Closing pauses input for one frame, then mouse look resumes. A new experiment closes it and
     /// starts the view over. The map's buttons have no keyboard navigation, so WASD only walks.
+    /// In coop the player mark takes this participant's robot color, and the other participants are drawn in the view's
+    /// prepared remote marks from RemotePlayers' latest received poses (only in rooms of the explored map; display only).
     /// The display is the scene's Map Canvas (prefab instance, inactive while closed); nothing is made at runtime.
     /// With incomplete parts it reports once and never takes input.
     /// </summary>
@@ -48,6 +50,11 @@ namespace WordRoom.Game
         bool open;
         bool unusableReported;
         string viewSession;                  // explored-map session the view's center and zoom belong to (null = none)
+        string[] slotIds;                    // PlayerId drawn in each remote mark of the view (null = empty slot)
+        int boundVersion = int.MinValue;              // RemotePlayers.Version the slots were bound at
+        string boundSession;                 // explored-map session the slots were bound at
+        bool boundCoop;
+        bool slotsShortReported;
 
         public bool IsOpen => open;
 
@@ -64,6 +71,7 @@ namespace WordRoom.Game
                 return;
             }
             view.Initialize();
+            slotIds = new string[view.RemoteSlots];
             ArchiveUi.Bind(bindings, view.CloseButton, Close);
             ArchiveUi.Bind(bindings, view.RecenterButton, Recenter);
             onStarted = OnExperimentStarted;
@@ -124,7 +132,77 @@ namespace WordRoom.Game
         {
             if (!open) return;
             var hasPose = TryPlayerPose(out var pose, out var heading);
+            view.SetPlayerColor(TryCoopColor(game.ExploredMap.LocalPlayer, out var own) ? own : (Color?)null);
             view.Tick(game.ExploredMap, hasPose, pose, heading);
+            DrawRemotes();
+        }
+
+        /// <summary>A coop participant's color (the same as its robot's accent); false in single play or without RemotePlayers.</summary>
+        bool TryCoopColor(string playerId, out Color color)
+        {
+            color = default;
+            var rp = game.RemotePlayers;
+            return game.IsCoop && rp != null && rp.TryGetAccent(playerId, out color);
+        }
+
+        /// <summary>
+        /// The other participants' marks: each bound one with a fresh received pose standing in a room of the explored map,
+        /// at its real position and heading (display only — nothing here confirms an entry, a visit or the goal). Every
+        /// other slot is hidden. Never this device's own player.
+        /// </summary>
+        void DrawRemotes()
+        {
+            BindSlots();
+            var rp = game.RemotePlayers;
+            var map = game.ExploredMap;
+            for (var i = 0; i < slotIds.Length; i++)
+            {
+                var id = slotIds[i];
+                var show = false;
+                Vector2 mp = default;
+                var h = 0f;
+                var color = default(Color);
+                if (id != null && rp != null && rp.TryGetPose(id, out var position, out var yaw)
+                    && worldView.TryGetMapPose(position, yaw, out mp, out h)
+                    && map.Has(RoomWorldView.MapCell(mp))                      // never a room this map has not revealed
+                    && rp.TryGetAccent(id, out color))
+                    show = true;
+                view.DrawRemote(i, show, mp, h, color);
+            }
+        }
+
+        /// <summary>
+        /// Slots follow the fixed participants (fixed order, this device's own and those who left skipped); rebound only
+        /// when the participants, the session or the play mode change, never per frame.
+        /// </summary>
+        void BindSlots()
+        {
+            var rp = game.RemotePlayers;
+            var version = rp != null ? rp.Version : -1;
+            var session = game.ExploredMap.Session;
+            var coop = game.IsCoop;
+            if (version == boundVersion && session == boundSession && coop == boundCoop) return;
+            boundVersion = version;
+            boundSession = session;
+            boundCoop = coop;
+            for (var i = 0; i < slotIds.Length; i++) slotIds[i] = null;
+            if (!coop || rp == null) return;
+            var local = game.ExploredMap.LocalPlayer;
+            var next = 0;
+            var others = 0;
+            var list = rp.Participants;
+            for (var i = 0; i < list.Count; i++)
+            {
+                var id = list[i];
+                if (id == local || !rp.IsPresent(id)) continue;
+                others++;
+                if (next < slotIds.Length) slotIds[next++] = id;
+            }
+            if (others > slotIds.Length && !slotsShortReported)
+            {
+                slotsShortReported = true;
+                Debug.LogWarning($"[지도] 다른 참가자 {others}명 중 {slotIds.Length}명만 지도에 표시합니다(원격 마커 슬롯 부족). WordRoom/지도 화면 구성 메뉴로 Map Canvas의 원격 마커를 보완하세요.", this);
+            }
         }
 
         bool TryPlayerPose(out Vector2 pose, out float heading)
@@ -202,6 +280,8 @@ namespace WordRoom.Game
             Close();
             viewSession = game.ExploredMap.Session;
             view.BeginSession();
+            boundVersion = int.MinValue;                                       // slots and colors are bound again on the next open
+            boundSession = null;
         }
 
         /// <summary>Only the map mode of this map's player changes; menu blocks and the generation lock are untouched.</summary>

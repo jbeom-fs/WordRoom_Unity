@@ -42,6 +42,8 @@ namespace WordRoom.Game
         [SerializeField] Button recenterButton;
         [Tooltip("범례의 플레이어 견본(선택). 실행 중 플레이어 삼각형 색을 씁니다.")]
         [SerializeField] Graphic playerSwatch;
+        [Tooltip("협동에서 다른 참가자를 표시할 삼각형(선택, 편집 단계에서 미리 만든 슬롯). 비어 있으면 다른 참가자를 지도에 표시하지 않습니다.")]
+        [SerializeField] MapMarker[] remoteMarkers = new MapMarker[0];
 
         [Header("배율 (칸 크기 = 방 하나의 Canvas 단위 크기)")]
         [SerializeField] float defaultCell = 120f;
@@ -66,6 +68,8 @@ namespace WordRoom.Game
         [Tooltip("플레이어 삼각형 크기 / 칸 크기")]
         [SerializeField] float markerFraction = 0.22f;
         [SerializeField] float markerMinSize = 16f;
+        [Tooltip("다른 참가자 삼각형 크기 / 본인 삼각형 크기(협동). 본인이 조금 더 크게 보입니다.")]
+        [SerializeField] float remoteMarkerScale = 0.8f;
 
         public Button CloseButton => closeButton;
         public Button RecenterButton => recenterButton;
@@ -91,6 +95,11 @@ namespace WordRoom.Game
         float[] slotCell;
         int pass;
         float markerSize = -1f;
+        Color soloColor;                     // the player mark's own color (single play; the prefab's mint)
+        float[] remoteSize;                  // size last set per remote slot
+
+        /// <summary>Prepared marks for other participants (0 when the prefab has none).</summary>
+        public int RemoteSlots => remoteMarkers != null ? remoteMarkers.Length : 0;
 
         /// <summary>Why the parts cannot be used (null = usable).</summary>
         public string MissingParts()
@@ -127,7 +136,28 @@ namespace WordRoom.Game
                 if (words[i].enabled) words[i].enabled = false;
             }
             if (playerMarker.enabled) playerMarker.enabled = false;
+            soloColor = playerMarker.color;
             if (playerSwatch != null && playerSwatch.color != playerMarker.color) playerSwatch.color = playerMarker.color;
+            if (remoteMarkers == null) remoteMarkers = new MapMarker[0];
+            remoteSize = new float[remoteMarkers.Length];
+            for (var i = 0; i < remoteMarkers.Length; i++)
+            {
+                remoteSize[i] = -1f;
+                if (remoteMarkers[i] == null) continue;
+                remoteMarkers[i].raycastTarget = false;                        // never in the way of the drag, the wheel or a button
+                if (remoteMarkers[i].enabled) remoteMarkers[i].enabled = false;
+            }
+        }
+
+        /// <summary>
+        /// The player mark's color and the legend's sample: a coop participant's color, or (null) the mark's own single-play
+        /// color. Changed only when different (no redraw otherwise).
+        /// </summary>
+        public void SetPlayerColor(Color? coop)
+        {
+            var c = coop ?? soloColor;
+            if (playerMarker.color != c) playerMarker.color = c;
+            if (playerSwatch != null && playerSwatch.color != c) playerSwatch.color = c;
         }
 
         void OnDestroy()
@@ -343,6 +373,34 @@ namespace WordRoom.Game
             r.anchoredPosition = (pose - center) * cell;                       // the real position, never shifted for the words
             r.localRotation = Quaternion.Euler(0f, 0f, -heading);              // clockwise from 상, the map itself never turns
             if (!playerMarker.enabled) playerMarker.enabled = true;
+        }
+
+        /// <summary>
+        /// Another participant's mark in slot `slot` (after Tick, so it follows the same center and zoom): its real map
+        /// position and heading in its color, a little smaller than the player's own; hidden when `show` is false. Never
+        /// moved for the words or the other marks; only the RectTransform and (when it changed) the color are set.
+        /// </summary>
+        public void DrawRemote(int slot, bool show, Vector2 pose, float heading, Color color)
+        {
+            if (slot < 0 || slot >= RemoteSlots) return;
+            var m = remoteMarkers[slot];
+            if (m == null) return;
+            if (!show || cell <= 0f)
+            {
+                if (m.enabled) m.enabled = false;
+                return;
+            }
+            var size = MarkerSize() * remoteMarkerScale;
+            var r = m.rectTransform;
+            if (!Mathf.Approximately(size, remoteSize[slot]))
+            {
+                remoteSize[slot] = size;
+                r.sizeDelta = new Vector2(size, size);
+            }
+            r.anchoredPosition = (pose - center) * cell;
+            r.localRotation = Quaternion.Euler(0f, 0f, -heading);
+            if (m.color != color) m.color = color;
+            if (!m.enabled) m.enabled = true;
         }
     }
 }

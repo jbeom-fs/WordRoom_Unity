@@ -47,6 +47,12 @@ namespace WordRoom.Network
         public const byte AckCode = 113;
         public const byte StopCode = 114;
         public const byte StopAckCode = 115;
+        /// <summary>A participant's real position and heading for the others' display (unreliable, never a logical change).</summary>
+        public const byte PoseCode = 116;
+
+        /// <summary>Largest world coordinate a pose may carry (meters; rooms are a few meters apart, MaxCoordinate of them at most).</summary>
+        public const float MaxPoseCoordinate = MaxCoordinate * 10f;
+        public const float MaxPoseHeight = 1000f;
 
         /// <summary>Rooms one fill can add (the four neighbors of the prepared room at most).</summary>
         public const int MaxAddedRooms = 4;
@@ -60,7 +66,7 @@ namespace WordRoom.Network
         public const int MaxVisitsPerPlayer = MaxRooms;
         public const int MaxPathPerPlayer = MaxRooms;
 
-        public static bool IsCoopCode(byte code) => code >= BeginCode && code <= StopAckCode;
+        public static bool IsCoopCode(byte code) => code >= BeginCode && code <= PoseCode;
 
         /// <summary>Exploration messages: kept in arrival order for the game side (see CoopSession).</summary>
         public static bool IsPlayCode(byte code) => code >= RequestCode && code <= StopAckCode;
@@ -188,6 +194,24 @@ namespace WordRoom.Network
             public bool Team;
         }
 
+        /// <summary>
+        /// One participant's real body pose for the others' display: where its feet are (world meters) and its heading
+        /// (degrees about the up axis; the camera's pitch is never sent). Seq grows with every pose of this sender (an
+        /// older one never replaces a newer); Placement grows whenever the sender's position was set rather than walked
+        /// (placed, put back), so a display never glides across such a jump. Display only: it changes no logical state.
+        /// </summary>
+        public sealed class Pose
+        {
+            public string Attempt;
+            public string SessionId;
+            public int Seq;
+            public int Placement;
+            public float X;
+            public float Y;
+            public float Z;
+            public float Yaw;
+        }
+
         /// <summary>One confirmed change of the host's session (one revision).</summary>
         public sealed class Change
         {
@@ -241,6 +265,8 @@ namespace WordRoom.Network
         public static object[] Encode(Stop m) => new object[] { Version, m.Attempt, m.SessionId, m.Team, Cut(m.Reason) };
 
         public static object[] Encode(StopAck m) => new object[] { Version, m.Attempt, m.SessionId, m.Team };
+
+        public static object[] Encode(Pose m) => new object[] { Version, m.Attempt, m.SessionId, m.Seq, m.Placement, m.X, m.Y, m.Z, m.Yaw };
 
         static bool HasRevision(RequestOutcome o) => o == RequestOutcome.Accepted || o == RequestOutcome.Failed;
 
@@ -537,6 +563,22 @@ namespace WordRoom.Network
             return true;
         }
 
+        /// <summary>A pose: exact form, finite numbers within the world's range, a heading within one turn either way.</summary>
+        public static bool TryDecode(object content, out Pose m, out string error)
+        {
+            m = null;
+            if (!Head(content, 9, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Int(a, 3, out var seq, ref error) ||
+                !Int(a, 4, out var placement, ref error) || !Flt(a, 5, out var x, ref error) || !Flt(a, 6, out var y, ref error) ||
+                !Flt(a, 7, out var z, ref error) || !Flt(a, 8, out var yaw, ref error))
+                return false;
+            if (seq < 1 || placement < 0) return Bad("포즈 순번", out error);
+            if (Math.Abs(x) > MaxPoseCoordinate || Math.Abs(z) > MaxPoseCoordinate || Math.Abs(y) > MaxPoseHeight) return Bad("포즈 위치 범위", out error);
+            if (yaw < -360f || yaw > 360f) return Bad("포즈 방향 범위", out error);
+            m = new Pose { Attempt = attempt, SessionId = session, Seq = seq, Placement = placement, X = x, Y = y, Z = z, Yaw = yaw };
+            return true;
+        }
+
         public static bool TryDecode(object content, out Resync m, out string error)
         {
             m = null;
@@ -762,6 +804,18 @@ namespace WordRoom.Network
         static bool Dbl(object[] a, int i, out double v, ref string error)
         {
             if (a[i] is double x && !double.IsNaN(x) && !double.IsInfinity(x))
+            {
+                v = x;
+                return true;
+            }
+            v = 0;
+            return Bad($"{i}번 값(유한한 실수)", out error);
+        }
+
+        /// <summary>A finite float (NaN and infinities are refused).</summary>
+        static bool Flt(object[] a, int i, out float v, ref string error)
+        {
+            if (a[i] is float x && !float.IsNaN(x) && !float.IsInfinity(x))
             {
                 v = x;
                 return true;

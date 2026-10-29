@@ -1048,6 +1048,7 @@ GameObject:
   - component: {fileID: 80028694}
   - component: {fileID: 80028697}
   - component: {fileID: 80028698}
+  - component: {fileID: 80028699}
   m_Layer: 0
   m_Name: RoomGenerationDebug
   m_TagString: Untagged
@@ -1087,6 +1088,7 @@ MonoBehaviour:
   player: {fileID: 1914820004}
   hint: {fileID: 80028692}
   hud: {fileID: 80028693}
+  remotePlayers: {fileID: 80028699}
   haltAdvice: "Esc\uB97C \uB20C\uB7EC \uBA54\uC778 \uBA54\uB274\uB85C \uB3CC\uC544\uAC00\uC138\uC694"
 --- !u!114 &80028689
 MonoBehaviour:
@@ -1238,6 +1240,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: WordRoom.Game::WordRoom.Game.GameplayBootstrap
   game: {fileID: 0}
   data: {fileID: 0}
+  coopReadyTimeoutSeconds: 120
 --- !u!114 &80028697
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1277,6 +1280,28 @@ MonoBehaviour:
   display: {fileID: 44101857}
   canvas: {fileID: 44101859}
   view: {fileID: 44101858}
+--- !u!114 &80028699
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 80028687}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 877cb50f3564ef04783dab03464fa034, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: WordRoom.World::WordRoom.World.RemotePlayers
+  robotPrefab: {fileID: 8344149264539857685, guid: 40e27a3d6f1e7474684775d595d08411, type: 3}
+  accentMaterial: {fileID: 2100000, guid: ac9bcedb068a76745b6a1776c27847bf, type: 2}
+  accentColors:
+  - {r: 0.44705883, g: 1, b: 0.8352941, a: 1}
+  - {r: 1, g: 0.70980394, b: 0.2784314, a: 1}
+  - {r: 0.43137255, g: 0.78431374, b: 1, a: 1}
+  - {r: 1, g: 0.47843137, b: 0.6117647, a: 1}
+  accentEmission: 1.5
+  interpolationDelay: 0.2
+  staleSeconds: 3
 --- !u!1001 &365624710
 PrefabInstance:
   m_ObjectHideFlags: 0

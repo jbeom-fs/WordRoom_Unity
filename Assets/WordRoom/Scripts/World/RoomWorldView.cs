@@ -274,6 +274,12 @@ namespace WordRoom.World
         bool IsShownUsable(GridPos p) => rooms.TryGetValue(p, out var v) && v != null && v.IsUsable(p);
 
         /// <summary>
+        /// Whether the world position lies in a room this view shows now (the room whose cell holds it, by the spacing and
+        /// origin fixed for this experiment) — e.g. whether another player's robot may be shown there. Never makes a room.
+        /// </summary>
+        public bool IsShownAt(Vector3 position) => TryGetMapPosition(position, out var p) && IsShownUsable(MapCell(p));
+
+        /// <summary>
         /// Whether `door` (e.g. the one the player aims at) may be opened: it is the shown door of a closed connection
         /// between the current room and a shown room. Doors toward 미생성 or hidden rooms, and doors of neighbor rooms
         /// that do not touch the current room, cannot be opened.
@@ -605,14 +611,36 @@ namespace WordRoom.World
         {
             position = default;
             heading = 0f;
-            if (!ready || target == null || spacing <= 0f) return false;
-            var p = target.position - origin;
-            position = new UnityEngine.Vector2(p.x / spacing, p.z / spacing);
+            if (target == null || !TryGetMapPosition(target.position, out position)) return false;
             var f = target.forward;
             if (f.x * f.x + f.z * f.z < 1e-8f) return false;
             heading = Mathf.Atan2(f.x, f.z) * Mathf.Rad2Deg;
             return true;
         }
+
+        /// <summary>
+        /// The same map pose for a world position and a heading about the up axis (degrees, 0 = +Z = 상, clockwise, as a
+        /// body's eulerAngles.y): e.g. another player's received pose. No object is needed. False before the view is prepared.
+        /// </summary>
+        public bool TryGetMapPose(Vector3 worldPosition, float yaw, out UnityEngine.Vector2 position, out float heading)
+        {
+            heading = 0f;
+            if (!TryGetMapPosition(worldPosition, out position) || float.IsNaN(yaw) || float.IsInfinity(yaw)) return false;
+            heading = Mathf.DeltaAngle(0f, yaw);                             // the same degrees, within one turn
+            return true;
+        }
+
+        bool TryGetMapPosition(Vector3 worldPosition, out UnityEngine.Vector2 position)
+        {
+            position = default;
+            if (!ready || spacing <= 0f) return false;
+            var p = worldPosition - origin;
+            position = new UnityEngine.Vector2(p.x / spacing, p.z / spacing);
+            return true;
+        }
+
+        /// <summary>The room cell a map position lies in (room centers on whole numbers; the nearest one), the same rule as IsShownAt.</summary>
+        public static GridPos MapCell(UnityEngine.Vector2 mapPosition) => new GridPos(Mathf.RoundToInt(mapPosition.x), Mathf.RoundToInt(mapPosition.y));
 
         // ---- rent / return ----------------------------------------------------------------------------------
         Vector3 RoomOrigin(GridPos p) => origin + new Vector3(p.X * spacing, 0f, p.Y * spacing);
