@@ -20,7 +20,8 @@ namespace WordRoom.Generation
     /// One player's request. SessionId, PlayerId and RequestId identify it (the same RequestId of the same player is
     /// never applied twice); ExpectedFrom is the room the requester believes it stands in, checked against its
     /// confirmed position. CrossedAt is the requester's real time of the boundary crossing (Enter only; NaN
-    /// otherwise), the end of the play time if this entry reaches the goal.
+    /// otherwise), the end of the play time if this entry reaches the goal — in solo; a coop coordinator with an end
+    /// clock (UseEndClock) reads the end at the confirmation instead and ignores it.
     /// </summary>
     public readonly struct SessionRequest
     {
@@ -49,9 +50,11 @@ namespace WordRoom.Generation
     /// nothing and is not a session failure (an ended session is told by Update.Status, an error by the exception).
     /// Update is always the caller's own deep copy of the confirmed change; changing it changes nothing kept.
     /// Duplicate: the same request (player and RequestId) was handled before. Its first outcome is returned as it was
-    /// confirmed then — the first Update (a new copy, same Revision, To, Fill …) or the first refusal — and nothing
-    /// is applied again. No capture runs for a duplicate: its Update may be older than the current state, so a
-    /// caller needing the current state reads it separately (SessionCoordinator.Read), never from this result.
+    /// confirmed then — the first Update (a new copy, same Revision, To, Fill …), the first refusal or the first
+    /// failure — and nothing is applied again. No capture runs for a duplicate: its Update may be older than the current
+    /// state, so a caller needing the current state reads it separately (SessionCoordinator.Read), never from this result.
+    /// Failure (only for a duplicate of a request whose first handling threw): that error, with FailedRevision the
+    /// session's revision right after it — the state may have changed partly, so it is neither accepted nor refused.
     /// Captured exists only when HasCaptured: a first, accepted request with a capture callback; it was made inside
     /// the same lock right after that change, so it belongs to Update.Revision. Reading Captured otherwise throws.
     /// </summary>
@@ -61,6 +64,8 @@ namespace WordRoom.Generation
 
         public GenerationUpdate Update { get; }
         public string Refusal { get; }
+        public string Failure { get; }
+        public long FailedRevision { get; }
         public bool Duplicate { get; }
         public bool Accepted => Update != null;
         public bool HasCaptured { get; }
@@ -75,18 +80,21 @@ namespace WordRoom.Generation
             }
         }
 
-        RequestResult(GenerationUpdate update, string refusal, bool duplicate, bool hasCaptured, T captured)
+        RequestResult(GenerationUpdate update, string refusal, bool duplicate, bool hasCaptured, T captured, string failure = null, long failedRevision = 0)
         {
             Update = update;
             Refusal = refusal;
             Duplicate = duplicate;
             HasCaptured = hasCaptured;
             this.captured = captured;
+            Failure = failure;
+            FailedRevision = failedRevision;
         }
 
         internal static RequestResult<T> Refused(string refusal, bool duplicate = false) => new RequestResult<T>(null, refusal, duplicate, false, default);
         internal static RequestResult<T> Confirmed(GenerationUpdate update, bool duplicate) => new RequestResult<T>(update, null, duplicate, false, default);
         internal static RequestResult<T> WithCapture(GenerationUpdate update, T captured) => new RequestResult<T>(update, null, false, true, captured);
+        internal static RequestResult<T> FailedBefore(string failure, long revision) => new RequestResult<T>(null, null, true, false, default, failure, revision);
     }
 
     /// <summary>
@@ -121,6 +129,24 @@ namespace WordRoom.Generation
         {
             public GenerationUpdate Update;
             public string Refusal;
+            public string Failure;               // its handling threw; FailedRevision = the revision right after
+            public long FailedRevision;
+        }
+
+        Func<double> endClock;               // coop: the clock read for the goal entry when it is confirmed; null = the request's CrossedAt
+
+        /// <summary>
+        /// Coop: the end of play of the goal entry is read from `clock` inside the lock, at the moment that entry is
+        /// confirmed (not the requester's CrossedAt) — on the same time axis as the play clock start. The clock is called
+        /// on the worker that runs the request, so it must be thread-safe and use no engine API. Set once, before requests.
+        /// </summary>
+        public void UseEndClock(Func<double> clock)
+        {
+            lock (gate)
+            {
+                ThrowIfReentered();
+                endClock = clock;
+            }
         }
 
         public string SessionId => session.Id;
@@ -201,7 +227,9 @@ namespace WordRoom.Generation
         /// room behind it; the requester's position, moves, visits and the session status do not change. Enter
         /// updates only the requester's record and the team visit set and confirms the goal once; it never fills.
         /// Move (debug) enters and then fills, as before. Refusals change nothing. A duplicate returns its first
-        /// outcome without a capture (see RequestResult).
+        /// outcome without a capture (see RequestResult). An error while applying is thrown as before, and recorded:
+        /// the same request is never applied again (its duplicate returns that failure with the revision after it —
+        /// whatever had changed stays; nothing is rolled back here, see KI-001).
         /// </summary>
         public RequestResult<T> Submit<T>(SessionRequest r, Func<SessionReader, GenerationUpdate, T> capture, CancellationToken token = default)
         {
@@ -211,8 +239,20 @@ namespace WordRoom.Generation
                 if (r.SessionId != session.Id) return RequestResult<T>.Refused($"다른 세션의 요청입니다({r.SessionId}).");
                 var key = (r.PlayerId ?? "", r.RequestId);
                 if (handled.TryGetValue(key, out var before))
+                {
+                    if (before.Failure != null) return RequestResult<T>.FailedBefore(before.Failure, before.FailedRevision);
                     return before.Update != null ? RequestResult<T>.Confirmed(before.Update.Copy(), true) : RequestResult<T>.Refused(before.Refusal, true);
-                var h = Apply(r, token);                   // an exception leaves nothing recorded for this request
+                }
+                Handled h;
+                try
+                {
+                    h = Apply(r, token);
+                }
+                catch (Exception e)
+                {
+                    handled[key] = new Handled { Failure = e.Message, FailedRevision = session.Revision };   // never applied a second time
+                    throw;
+                }
                 handled[key] = h;                          // kept as confirmed; only copies leave
                 return h.Update != null ? Respond(h.Update, capture) : RequestResult<T>.Refused(h.Refusal);
             }
@@ -316,7 +356,7 @@ namespace WordRoom.Generation
                 if (changed) session.Revision++;           // also after an error: whatever changed is a new state
             }
             if (u == null) throw new InvalidOperationException($"처리할 수 없는 요청 종류: {r.Kind}");   // Check refuses these first; nothing was changed
-            Finish(u, player, r.RequestId, r.Kind == RequestKind.Enter ? r.CrossedAt : double.NaN);
+            Finish(u, player, r.RequestId, r.Kind == RequestKind.Enter ? (endClock != null ? endClock() : r.CrossedAt) : double.NaN);   // read at the confirmation
             return new Handled { Update = u };
         }
 

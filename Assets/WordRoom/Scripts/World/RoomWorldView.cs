@@ -303,6 +303,33 @@ namespace WordRoom.World
         }
 
         /// <summary>
+        /// A door this device started opening (OpenDoor) whose opening the session refused: back to closed at once,
+        /// unless the last shown snapshot confirms the connection Open (e.g. another player opened it meanwhile).
+        /// </summary>
+        public void RevertOpening(RoomConnection id)
+        {
+            if (!doors.TryGetValue(id, out var door) || door == null || !door.Active) return;
+            if (shown != null && shown.Door(id) == DoorState.Open) return;
+            door.Apply(DoorState.Closed, openLift);
+            UpdatePassages();
+        }
+
+        /// <summary>
+        /// A point inside the shown room `room`, `depth` meters in from its doorway toward `side` (at the doorway's
+        /// height; a floor is searched below it by the caller) — where a player that crossed that doorway is put back
+        /// when its entry was not confirmed. False when the view is not ready or the room is not shown.
+        /// </summary>
+        public bool TryGetInsidePoint(GridPos room, Direction side, float depth, out Vector3 point)
+        {
+            point = default;
+            if (!ready || !IsShownUsable(room)) return false;
+            var id = RoomConnection.Of(room, side);
+            var doorway = RoomOrigin(id.Anchor) + layout.Pose(id.AnchorSide).BodyCenter;
+            point = doorway - RoomPrefabLayout.Normal(side) * depth;
+            return true;
+        }
+
+        /// <summary>
         /// Whether the player's center, moving from `from` to `to` in this frame, went EntryDepth (0.15m) past the
         /// boundary between the current room and a neighbor through a passable doorway (door fully open, both rooms
         /// shown, crossing point within the doorway width). Uses the spacing, origin and door placement fixed for

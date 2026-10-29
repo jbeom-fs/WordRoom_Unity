@@ -27,7 +27,10 @@ namespace WordRoom.Network
     /// raised (every ready is void) and everyone still in the room loads the main menu's waiting room. A disconnect or
     /// leaving the room ends this object (LastEndReason tells the game why). Leaving on purpose (LeaveGame) leaves the
     /// room, or disconnects when this session owns the connection; a connection it was lent is never disconnected.
-    /// No reconnection, host migration or exploration messages here.
+    /// Exploration (from the common start on): requests and full-state requests reach the host only from a
+    /// participant of the start (the event's real sender); replies, confirmed changes and full states are accepted only
+    /// from the real host. They are kept in arrival order until the game side takes them (TryTakePlay); the host's own
+    /// messages go through the same queue. Nothing here judges or applies them. No reconnection or host migration.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class CoopSession : MonoBehaviour, IOnEventCallback, IInRoomCallbacks, IMatchmakingCallbacks, IConnectionCallbacks
@@ -78,6 +81,7 @@ namespace WordRoom.Network
         long placedRevision;
         CoopProtocol.Go go;
         double startedAt;
+        readonly Queue<PlayMessage> play = new Queue<PlayMessage>();
 
         /// <summary>Raised on the main thread after every change of stage, entry or notice.</summary>
         public event Action Changed;
@@ -205,6 +209,7 @@ namespace WordRoom.Network
             hostAttempt = null;
             worldContent = null;
             go = null;
+            play.Clear();
             Raise();
         }
 
@@ -331,6 +336,100 @@ namespace WordRoom.Network
             Raise();
         }
 
+        // ---- exploration --------------------------------------------------------------------------------------------
+        /// <summary>One exploration message as it arrived (its real sender), for the game side to check and use.</summary>
+        public readonly struct PlayMessage
+        {
+            public readonly byte Code;
+            public readonly int Sender;
+            public readonly object Content;
+
+            public PlayMessage(byte code, int sender, object content)
+            {
+                Code = code;
+                Sender = sender;
+                Content = content;
+            }
+        }
+
+        /// <summary>Display name of a participant of this start by its PlayerId (actor-N): its NickName, or the default name.</summary>
+        public string ParticipantName(string playerId)
+        {
+            if (entry != null)
+                foreach (var actor in entry.Actors)
+                    if (CoopRules.PlayerIdOf(actor) == playerId)
+                    {
+                        var p = PhotonNetwork.CurrentRoom?.GetPlayer(actor);
+                        return p != null ? Name(p) : CoopRules.DefaultParticipantName(actor);
+                    }
+            return playerId;
+        }
+
+        /// <summary>A participant (ActorNumber) is still in this room (one that left gets no state any more).</summary>
+        public bool IsInRoom(int actor) => PhotonNetwork.InRoom && PhotonNetwork.CurrentRoom != null && PhotonNetwork.CurrentRoom.Name == roomName && PhotonNetwork.CurrentRoom.GetPlayer(actor) != null;
+
+        /// <summary>The common start time is known or passed: exploration messages are kept from now on.</summary>
+        bool InPlay => entry != null && (stage == CoopStage.Counting || stage == CoopStage.Playing);
+
+        /// <summary>The next exploration message in arrival order (the host's own included).</summary>
+        public bool TryTakePlay(out PlayMessage message)
+        {
+            if (play.Count > 0)
+            {
+                message = play.Dequeue();
+                return true;
+            }
+            message = default;
+            return false;
+        }
+
+        /// <summary>A request (or a full-state request) of this device to the host; the host's own goes straight into its queue. False when it could not be sent.</summary>
+        public bool SendToHost(byte code, object[] content)
+        {
+            if (!InPlay || leaving) return false;
+            if (IsHost)
+            {
+                HandleToHost(code, PhotonNetwork.LocalPlayer.ActorNumber, content);
+                return true;
+            }
+            return Send(code, content, ReceiverGroup.MasterClient);
+        }
+
+        /// <summary>Host: a confirmed change to everyone, applied here through the same queue. False when the others could not be sent it.</summary>
+        public bool SendToAll(byte code, object[] content)
+        {
+            if (!IsHost || !InPlay || leaving) return false;
+            var sent = Send(code, content, ReceiverGroup.Others);
+            HandleFromHost(code, PhotonNetwork.LocalPlayer.ActorNumber, content);
+            return sent;
+        }
+
+        /// <summary>Host: a reply or a full state to one participant (this device's own goes into its queue). False when it could not be sent.</summary>
+        public bool SendTo(int actor, byte code, object[] content)
+        {
+            if (!IsHost || !InPlay || leaving) return false;
+            if (actor == PhotonNetwork.LocalPlayer.ActorNumber)
+            {
+                HandleFromHost(code, actor, content);
+                return true;
+            }
+            return PhotonNetwork.RaiseEvent(code, content, new RaiseEventOptions { TargetActors = new[] { actor } }, SendOptions.SendReliable);
+        }
+
+        /// <summary>Requests reach only the host of this start, and only from a participant of it (by the event's real sender).</summary>
+        void HandleToHost(byte code, int sender, object content)
+        {
+            if (!IsHost || !InPlay || Array.IndexOf(entry.Actors, sender) < 0) return;
+            play.Enqueue(new PlayMessage(code, sender, content));
+        }
+
+        /// <summary>Replies, changes and full states only from the real host of this start.</summary>
+        void HandleFromHost(byte code, int sender, object content)
+        {
+            if (!FromHost(sender) || !InPlay) return;
+            play.Enqueue(new PlayMessage(code, sender, content));
+        }
+
         /// <summary>
         /// Host: stops the start for everyone, with the reason shown to all — possible until the host itself started play
         /// (CoopStartRules.HostMayStop); every participant of the attempt applies it whatever its own stage.
@@ -394,6 +493,15 @@ namespace WordRoom.Network
                 case CoopProtocol.PlacedCode: HandlePlaced(e.Sender, e.CustomData); break;
                 case CoopProtocol.GoCode: HandleGo(e.Sender, e.CustomData); break;
                 case CoopProtocol.AbortCode: HandleAbort(e.Sender, e.CustomData); break;
+                case CoopProtocol.RequestCode:
+                case CoopProtocol.ResyncCode:
+                case CoopProtocol.QueryCode:
+                case CoopProtocol.AckCode:
+                case CoopProtocol.StopAckCode: HandleToHost(e.Code, e.Sender, e.CustomData); break;
+                case CoopProtocol.ReplyCode:
+                case CoopProtocol.ChangeCode:
+                case CoopProtocol.CopyCode:
+                case CoopProtocol.StopCode: HandleFromHost(e.Code, e.Sender, e.CustomData); break;
             }
         }
 
@@ -507,6 +615,7 @@ namespace WordRoom.Network
             AbortReason = string.IsNullOrEmpty(reason) ? "시작이 중단되었습니다" : reason;
             stage = CoopStage.Aborted;
             hostAttempt = null;
+            play.Clear();                                          // nothing of the stopped game is used any more
             entryPending = entryLost = false;
             Debug.LogWarning($"[협동] 게임 시작 중단: {AbortReason}");
             ReopenRoomIfMaster();

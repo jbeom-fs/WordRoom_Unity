@@ -51,6 +51,22 @@ namespace WordRoom.Network
         /// <summary>A participant gives up waiting this much later than the host's limit (the host normally stops the start first).</summary>
         public const float GuestGraceSeconds = 15f;
 
+        /// <summary>
+        /// Coop play: a door or entry request (or a full-state recovery) unanswered this long is told to the player as
+        /// delayed. Not a cancel and not a refusal: the request stays pending and a late answer is still applied.
+        /// </summary>
+        public const float RequestWaitNoticeSeconds = 10f;
+
+        /// <summary>
+        /// Coop play: how long a device may stay behind a revision it should have (an accepted answer ahead of its state,
+        /// or the host seeing its Ack behind) before the whole state is sent or asked for. Covers the normal order of a
+        /// change and its answer; not a request priority.
+        /// </summary>
+        public const float StateCatchUpSeconds = 3f;
+
+        /// <summary>Coop play: how many times the whole state is sent to (or asked for by) one device behind, or an outcome queried, before it is reported as failed.</summary>
+        public const int RecoveryAttempts = 3;
+
         /// <summary>Real-time limit of the lobby's 새로고침 (leave, join the same lobby, its first full list); later it is reported as not finished.</summary>
         public const float ListRefreshTimeoutSeconds = 15f;
 

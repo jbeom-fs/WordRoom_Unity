@@ -13,11 +13,24 @@ namespace WordRoom.Network
     /// CoopSession with the event's sender, never with a value in the body. GenerationUpdate, SessionCopy and
     /// FillReport objects are never sent; the initial world is sent as its coordinates, words, preparation, doors,
     /// team visits and players only (no relation data, vectors, recent words or generation reports).
+    /// Exploration (after the common start): a participant's door or entry request goes to the host (the PlayerId is
+    /// the event's sender, never a body value); the host answers the requester (Reply: the request's outcome — accepted
+    /// with the confirmed revision, refused, failed with the revision after it, pending or unknown) and sends every
+    /// confirmed change to everyone (Change: one revision, applied in order); each device tells the host the revision it
+    /// applied (Ack); a device that misses a revision asks for the whole state (Resync) — or the host sends it to a
+    /// device whose Ack stays behind — and gets one copy of one revision (Copy); a requester may ask again for the
+    /// outcome of the same RequestId (Query: answered from the host's record, never handled again). When the host cannot
+    /// secure a valid shared state it stops exploration for everyone (Stop with Team, sent again until each participant
+    /// still in the room confirms it with StopAck — never confirmed by a revision Ack or by a send that went out); a
+    /// participant whose state recovery ended gets a Stop for itself only (Team false), confirmed the same way.
     /// </summary>
     public static class CoopProtocol
     {
-        /// <summary>2: the initial world carries the whole fixed generation settings (EncodeConfig) instead of seed and vocabulary only.</summary>
-        public const int Version = 2;
+        /// <summary>
+        /// 2: the initial world carries the whole fixed generation settings. 3: exploration messages (107–111); a device
+        /// of another version refuses every message, so mixed builds never start a game together.
+        /// </summary>
+        public const int Version = 3;
 
         public const byte BeginCode = 101;
         public const byte DataCode = 102;
@@ -25,6 +38,18 @@ namespace WordRoom.Network
         public const byte PlacedCode = 104;
         public const byte GoCode = 105;
         public const byte AbortCode = 106;
+        public const byte RequestCode = 107;
+        public const byte ReplyCode = 108;
+        public const byte ChangeCode = 109;
+        public const byte ResyncCode = 110;
+        public const byte CopyCode = 111;
+        public const byte QueryCode = 112;
+        public const byte AckCode = 113;
+        public const byte StopCode = 114;
+        public const byte StopAckCode = 115;
+
+        /// <summary>Rooms one fill can add (the four neighbors of the prepared room at most).</summary>
+        public const int MaxAddedRooms = 4;
 
         public const int MaxIdLength = 64;
         public const int MaxPackageIdLength = 128;
@@ -35,7 +60,10 @@ namespace WordRoom.Network
         public const int MaxVisitsPerPlayer = MaxRooms;
         public const int MaxPathPerPlayer = MaxRooms;
 
-        public static bool IsCoopCode(byte code) => code >= BeginCode && code <= AbortCode;
+        public static bool IsCoopCode(byte code) => code >= BeginCode && code <= StopAckCode;
+
+        /// <summary>Exploration messages: kept in arrival order for the game side (see CoopSession).</summary>
+        public static bool IsPlayCode(byte code) => code >= RequestCode && code <= StopAckCode;
 
         // ---- messages ------------------------------------------------------------------------------------------
         public sealed class Begin
@@ -100,6 +128,93 @@ namespace WordRoom.Network
             public string Reason;
         }
 
+        /// <summary>A participant's door opening (Prepare) or entry (Enter) from the room it believes it stands in.</summary>
+        public sealed class Request
+        {
+            public string Attempt;
+            public string SessionId;
+            public long RequestId;
+            public RequestKind Kind;
+            public GridPos Expected;
+            public Direction Direction;
+        }
+
+        /// <summary>The host's answer to one request (sent to the requester only; also the answer to a Query of it).</summary>
+        public sealed class Reply
+        {
+            public string Attempt;
+            public string SessionId;
+            public long RequestId;
+            public RequestOutcome Outcome;
+            /// <summary>Accepted: the revision that confirmed it; Failed: the revision right after the error; otherwise 0.</summary>
+            public long Revision;
+            /// <summary>Refused or Failed: why.</summary>
+            public string Refusal;
+        }
+
+        /// <summary>A requester asks again for the outcome of one of its requests (same RequestId).</summary>
+        public sealed class Query
+        {
+            public string Attempt;
+            public string SessionId;
+            public long RequestId;
+        }
+
+        /// <summary>A device applied the host's state up to Revision (its whole shown state, not one message).</summary>
+        public sealed class Ack
+        {
+            public string Attempt;
+            public string SessionId;
+            public long Revision;
+        }
+
+        /// <summary>
+        /// The host stops exploration — for everyone (Team: no valid shared state) or for this participant only (its
+        /// state recovery ended); the participant confirms it with a StopAck of the same kind.
+        /// </summary>
+        public sealed class Stop
+        {
+            public string Attempt;
+            public string SessionId;
+            public bool Team;
+            public string Reason;
+        }
+
+        /// <summary>A participant received the host's stop of this kind (sent again for every Stop it receives; it stops only once).</summary>
+        public sealed class StopAck
+        {
+            public string Attempt;
+            public string SessionId;
+            public bool Team;
+        }
+
+        /// <summary>One confirmed change of the host's session (one revision).</summary>
+        public sealed class Change
+        {
+            public string Attempt;
+            public SessionChange Data;
+        }
+
+        /// <summary>A device missed a revision and asks the host for the whole state.</summary>
+        public sealed class Resync
+        {
+            public string Attempt;
+            public string SessionId;
+            public long Have;
+        }
+
+        /// <summary>The whole state of one revision for a device that asked (or why it cannot be sent).</summary>
+        public sealed class Copy
+        {
+            public string Attempt;
+            public string SessionId;
+            public long Revision;
+            /// <summary>The state with the host's result (null when Error is set).</summary>
+            public World State;
+            /// <summary>Why the host could not send the state (empty = sent).</summary>
+            public string Error;
+        }
+
         // ---- encode --------------------------------------------------------------------------------------------
         public static object[] Encode(Begin m) => new object[] { Version, m.Attempt, m.Host, m.Actors, m.Difficulty, m.SettingsRevision };
 
@@ -110,6 +225,66 @@ namespace WordRoom.Network
         public static object[] Encode(Go m) => new object[] { Version, m.Attempt, m.SessionId, m.Revision, m.StartServerTime };
 
         public static object[] Encode(Abort m) => new object[] { Version, m.Attempt, Cut(m.Reason) };
+
+        public static object[] Encode(Request m) =>
+            new object[] { Version, m.Attempt, m.SessionId, m.RequestId, (int)m.Kind, m.Expected.X, m.Expected.Y, (int)m.Direction };
+
+        public static object[] Encode(Reply m) =>
+            new object[] { Version, m.Attempt, m.SessionId, m.RequestId, (int)m.Outcome, HasRevision(m.Outcome) ? m.Revision : 0L, Cut(m.Refusal) };
+
+        public static object[] Encode(Resync m) => new object[] { Version, m.Attempt, m.SessionId, m.Have };
+
+        public static object[] Encode(Query m) => new object[] { Version, m.Attempt, m.SessionId, m.RequestId };
+
+        public static object[] Encode(Ack m) => new object[] { Version, m.Attempt, m.SessionId, m.Revision };
+
+        public static object[] Encode(Stop m) => new object[] { Version, m.Attempt, m.SessionId, m.Team, Cut(m.Reason) };
+
+        public static object[] Encode(StopAck m) => new object[] { Version, m.Attempt, m.SessionId, m.Team };
+
+        static bool HasRevision(RequestOutcome o) => o == RequestOutcome.Accepted || o == RequestOutcome.Failed;
+
+        /// <summary>One confirmed change: identity, requester, kind, from/to, door, added rooms, team first visit, moves, status, result.</summary>
+        public static object[] EncodeChange(string attempt, SessionChange c) => new object[]
+        {
+            Version, attempt, c.SessionId, c.Revision, c.PlayerId, c.RequestId, (int)c.Kind, c.From.X, c.From.Y, c.To.X, c.To.Y, c.DoorOpened,
+            c.Added.Select(kv => kv.Key.X).ToArray(), c.Added.Select(kv => kv.Key.Y).ToArray(), c.Added.Select(kv => kv.Value).ToArray(),
+            c.TeamFirstVisit, c.Moves, c.Status ?? "", EncodeResult(c.Result),
+        };
+
+        /// <summary>
+        /// The whole state `copy` (with its result) for one device, as the initial world encoding plus the result; or,
+        /// with `error`, only why it cannot be sent (e.g. too large for the decoder's limits — never sent as a success).
+        /// </summary>
+        public static object[] EncodeCopy(string attempt, string sessionId, long revision, object[] world, SessionResult result, string error) =>
+            new object[] { Version, attempt, sessionId, revision, error == null ? world : new object[0], EncodeResult(error == null ? result : null), Cut(error) };
+
+        /// <summary>The fixed result: revision, who reached the goal, seconds (when known), team visits, and each player's visits and moves.</summary>
+        static object[] EncodeResult(SessionResult r) => r == null ? new object[0] : new object[]
+        {
+            r.Revision, r.ReachedBy, !double.IsNaN(r.Seconds), double.IsNaN(r.Seconds) ? 0d : r.Seconds, r.TeamVisitedRooms,
+            r.Players.Select(p => p.PlayerId).ToArray(), r.Players.Select(p => p.VisitedRooms).ToArray(), r.Players.Select(p => p.Moves).ToArray(),
+        };
+
+        const int ResultLength = 8;
+
+        /// <summary>
+        /// Whether `copy` stays inside the limits a receiver's TryDecodeWorld accepts (rooms, preparation, doors, team
+        /// visits, every player's visits and path). Over a limit the state is not sent (and never reported as sent).
+        /// The byte size Photon itself allows per message is not checked here.
+        /// </summary>
+        public static bool FitsWorld(SessionCopy copy, out string why)
+        {
+            var visits = copy.Players.Sum(p => p.Visits.Count);
+            var path = copy.Players.Sum(p => p.Path.Count);
+            if (copy.Rooms.Count > MaxRooms || copy.Prepared.Count > MaxRooms || copy.TeamVisited.Count > MaxRooms) why = $"방 {copy.Rooms.Count}개(최대 {MaxRooms})";
+            else if (copy.OpenDoors.Count > MaxRooms * 2) why = $"열린 문 {copy.OpenDoors.Count}개(최대 {MaxRooms * 2})";
+            else if (copy.Players.Count > CoopRules.MaxPlayers) why = $"플레이어 {copy.Players.Count}명";
+            else if (visits > MaxVisitsPerPlayer * CoopRules.MaxPlayers) why = $"방문 기록 {visits}개";
+            else if (path > MaxPathPerPlayer * CoopRules.MaxPlayers) why = $"이동 경로 {path}개(최대 {MaxPathPerPlayer * CoopRules.MaxPlayers})";
+            else why = null;
+            return why == null;
+        }
 
         /// <summary>
         /// The fixed generation settings as plain values, every field that changes generation or its rules, in this
@@ -292,12 +467,174 @@ namespace WordRoom.Network
             return true;
         }
 
+        public static bool TryDecode(object content, out Request m, out string error)
+        {
+            m = null;
+            if (!Head(content, 8, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Long(a, 3, out var id, ref error) ||
+                !Int(a, 4, out var kind, ref error) || !Int(a, 5, out var x, ref error) || !Int(a, 6, out var y, ref error) || !Int(a, 7, out var side, ref error))
+                return false;
+            if (id < 1) return Bad($"요청 번호 {id}", out error);
+            if (!PlayKind(kind)) return Bad($"요청 종류 {kind}", out error);
+            if (!Coord(x) || !Coord(y)) return Bad("좌표 범위", out error);
+            if (!Enum.IsDefined(typeof(Direction), side)) return Bad($"방향 {side}", out error);
+            m = new Request { Attempt = attempt, SessionId = session, RequestId = id, Kind = (RequestKind)kind, Expected = new GridPos(x, y), Direction = (Direction)side };
+            return true;
+        }
+
+        public static bool TryDecode(object content, out Reply m, out string error)
+        {
+            m = null;
+            if (!Head(content, 7, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Long(a, 3, out var id, ref error) ||
+                !Int(a, 4, out var outcome, ref error) || !Long(a, 5, out var revision, ref error) || !Str(a, 6, MaxTextLength, true, out var refusal, ref error))
+                return false;
+            if (id < 1) return Bad($"요청 번호 {id}", out error);
+            if (!Enum.IsDefined(typeof(RequestOutcome), outcome)) return Bad($"응답 결과 {outcome}", out error);
+            var o = (RequestOutcome)outcome;
+            if (o == RequestOutcome.Accepted ? revision < 2 : o == RequestOutcome.Failed ? revision < 1 : revision != 0)
+                return Bad($"응답 순번 {revision}", out error);                // 1 is the start; every accepted request comes after it
+            m = new Reply { Attempt = attempt, SessionId = session, RequestId = id, Outcome = o, Revision = revision, Refusal = refusal };
+            return true;
+        }
+
+        public static bool TryDecode(object content, out Query m, out string error)
+        {
+            m = null;
+            if (!Head(content, 4, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Long(a, 3, out var id, ref error)) return false;
+            if (id < 1) return Bad($"요청 번호 {id}", out error);
+            m = new Query { Attempt = attempt, SessionId = session, RequestId = id };
+            return true;
+        }
+
+        public static bool TryDecode(object content, out Ack m, out string error)
+        {
+            m = null;
+            if (!Head(content, 4, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Long(a, 3, out var revision, ref error)) return false;
+            if (revision < 1) return Bad($"적용 순번 {revision}", out error);
+            m = new Ack { Attempt = attempt, SessionId = session, Revision = revision };
+            return true;
+        }
+
+        public static bool TryDecode(object content, out Stop m, out string error)
+        {
+            m = null;
+            if (!Head(content, 5, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Bool(a, 3, out var team, ref error) ||
+                !Str(a, 4, MaxTextLength, true, out var reason, ref error)) return false;
+            m = new Stop { Attempt = attempt, SessionId = session, Team = team, Reason = reason };
+            return true;
+        }
+
+        public static bool TryDecode(object content, out StopAck m, out string error)
+        {
+            m = null;
+            if (!Head(content, 4, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Bool(a, 3, out var team, ref error)) return false;
+            m = new StopAck { Attempt = attempt, SessionId = session, Team = team };
+            return true;
+        }
+
+        public static bool TryDecode(object content, out Resync m, out string error)
+        {
+            m = null;
+            if (!Head(content, 4, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Long(a, 3, out var have, ref error)) return false;
+            if (have < 0) return Bad($"보유 순번 {have}", out error);
+            m = new Resync { Attempt = attempt, SessionId = session, Have = have };
+            return true;
+        }
+
+        /// <summary>
+        /// One confirmed change, checked for its own form (types, sizes, coordinates, adjacency, word ids within the
+        /// receiver's vocabulary, the result). Whether it fits the receiver's state is SessionCopy.Apply's check.
+        /// </summary>
+        public static bool TryDecodeChange(object content, int wordCount, out Change m, out string error)
+        {
+            m = null;
+            if (!Head(content, 19, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Long(a, 3, out var revision, ref error) ||
+                !Id(a, 4, out var player, ref error) || !Long(a, 5, out var id, ref error) || !Int(a, 6, out var kind, ref error) ||
+                !Int(a, 7, out var fx, ref error) || !Int(a, 8, out var fy, ref error) || !Int(a, 9, out var tx, ref error) || !Int(a, 10, out var ty, ref error) ||
+                !Bool(a, 11, out var opened, ref error) || !Ints(a, 12, MaxAddedRooms, out var ax, ref error) || !Ints(a, 13, MaxAddedRooms, out var ay, ref error) ||
+                !Ints(a, 14, MaxAddedRooms, out var aw, ref error) || !Bool(a, 15, out var teamFirst, ref error) || !Int(a, 16, out var moves, ref error) ||
+                !Str(a, 17, MaxStatusLength, false, out var status, ref error))
+                return false;
+            if (revision < 2 || id < 1 || moves < 0) return Bad("변경 순번·요청 번호·이동 수", out error);
+            if (!PlayKind(kind)) return Bad($"변경 종류 {kind}", out error);
+            if (!Coord(fx) || !Coord(fy) || !Coord(tx) || !Coord(ty) || !Coords(ax) || !Coords(ay)) return Bad("좌표 범위", out error);
+            var from = new GridPos(fx, fy);
+            var to = new GridPos(tx, ty);
+            if (GridPos.Distance(from, to) != 1) return Bad($"이동 {from}→{to}", out error);
+            if (ax.Length != ay.Length || ax.Length != aw.Length) return Bad("추가된 방 배열 길이", out error);
+            if (aw.Any(w => !Word(w, wordCount))) return Bad("추가된 방 단어 번호", out error);
+            if (!TryDecodeResult(a[18], out var result, out error)) return false;
+            if (result != null && (status != "success" || result.Revision != revision)) return Bad("결과와 세션 상태·순번", out error);
+            var c = new SessionChange
+            {
+                SessionId = session, Revision = revision, PlayerId = player, RequestId = id, Kind = (RequestKind)kind, From = from, To = to,
+                DoorOpened = opened, TeamFirstVisit = teamFirst, Moves = moves, Status = status, Result = result,
+            };
+            for (var i = 0; i < ax.Length; i++) c.Added.Add(new KeyValuePair<GridPos, int>(new GridPos(ax[i], ay[i]), aw[i]));
+            m = new Change { Attempt = attempt, Data = c };
+            return true;
+        }
+
+        /// <summary>The whole state for this device (decoded and restored like the initial world, with the host's result), or the host's reason it is missing.</summary>
+        public static bool TryDecodeCopy(object content, int wordCount, out Copy m, out string error)
+        {
+            m = null;
+            if (!Head(content, 7, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Long(a, 3, out var revision, ref error) ||
+                !Str(a, 6, MaxTextLength, true, out var failure, ref error))
+                return false;
+            if (failure.Length > 0)
+            {
+                m = new Copy { Attempt = attempt, SessionId = session, Revision = revision, Error = failure };
+                return true;
+            }
+            if (!TryDecodeResult(a[5], out var result, out error)) return false;
+            if (!TryDecodeWorld(a[4], wordCount, result, out var world, out error)) return false;
+            if (world.Attempt != attempt || world.Copy.SessionId != session || world.Copy.Revision != revision) return Bad("전체 상태의 시작·세션·순번", out error);
+            m = new Copy { Attempt = attempt, SessionId = session, Revision = revision, State = world, Error = "" };
+            return true;
+        }
+
+        static bool TryDecodeResult(object content, out SessionResult result, out string error)
+        {
+            result = null;
+            error = null;
+            var a = content as object[];
+            if (a == null) return Bad("결과 형식", out error);
+            if (a.Length == 0) return true;
+            if (a.Length != ResultLength) return Bad($"결과 형식(길이 {a.Length})", out error);
+            if (!Long(a, 0, out var revision, ref error) || !Id(a, 1, out var reachedBy, ref error) || !Bool(a, 2, out var hasSeconds, ref error) ||
+                !Dbl(a, 3, out var seconds, ref error) || !Int(a, 4, out var team, ref error) ||
+                !Strs(a, 5, CoopRules.MaxPlayers, MaxIdLength, out var ids, ref error) || !Ints(a, 6, CoopRules.MaxPlayers, out var visited, ref error) ||
+                !Ints(a, 7, CoopRules.MaxPlayers, out var moves, ref error))
+                return false;
+            if (revision < 2 || seconds < 0 || team < 1 || team > MaxRooms) return Bad("결과 값 범위", out error);
+            if (ids.Length != visited.Length || ids.Length != moves.Length || ids.Distinct().Count() != ids.Length || Array.IndexOf(ids, reachedBy) < 0)
+                return Bad("결과의 플레이어", out error);
+            if (visited.Any(v => v < 1 || v > team) || moves.Any(v => v < 0)) return Bad("결과의 방문·이동 수", out error);
+            result = SessionChange.MakeResult(revision, reachedBy, hasSeconds ? seconds : double.NaN, team,
+                ids.Select((id, i) => new PlayerResult(id, visited[i], moves[i])));
+            return true;
+        }
+
+        static bool PlayKind(int kind) => kind == (int)RequestKind.Prepare || kind == (int)RequestKind.Enter;
+
         /// <summary>
         /// The initial world, checked against the receiver's vocabulary size (`wordCount`) — the fixed settings with
         /// TryDecodeConfig — and then restored into an independent SessionCopy (which checks its own consistency: start
         /// room, duplicates, players and visits). The copy's seed is the settings' seed (one source).
         /// </summary>
-        public static bool TryDecodeWorld(object content, int wordCount, out World m, out string error)
+        public static bool TryDecodeWorld(object content, int wordCount, out World m, out string error) => TryDecodeWorld(content, wordCount, null, out m, out error);
+
+        /// <summary>The same, with the host's confirmed result kept in the restored copy (a full-state recovery after the goal).</summary>
+        static bool TryDecodeWorld(object content, int wordCount, SessionResult result, out World m, out string error)
         {
             m = null;
             if (!Head(content, WorldLength, out var a, out error)) return false;
@@ -345,6 +682,7 @@ namespace WordRoom.Network
             var parts = new SessionCopyParts
             {
                 SessionId = session, Mode = SessionMode.Coop, Revision = revision, StartWord = startWord, TargetWord = targetWord, Seed = config.Seed, PackageId = package, Status = status,
+                Result = result,
             };
             for (var i = 0; i < rx.Length; i++) parts.Rooms.Add(new KeyValuePair<GridPos, int>(new GridPos(rx[i], ry[i]), rw[i]));
             for (var i = 0; i < prx.Length; i++) parts.Prepared.Add(new GridPos(prx[i], pry[i]));
@@ -399,7 +737,9 @@ namespace WordRoom.Network
 
         static bool Word(int w, int wordCount) => w >= 0 && w < wordCount;
 
-        static bool Coords(int[] v) => v.All(c => c >= -MaxCoordinate && c <= MaxCoordinate);
+        static bool Coords(int[] v) => v.All(Coord);
+
+        static bool Coord(int c) => c >= -MaxCoordinate && c <= MaxCoordinate;
 
         static bool Bad(string what, out string error)
         {

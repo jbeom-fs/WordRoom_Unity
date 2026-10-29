@@ -441,7 +441,7 @@ namespace WordRoom.RoomDebug
             RefreshHud();
             RefreshRadiusIfChanged();
             var direction = ReadDirection();
-            if (coopMode)                                                  // coop: no arrow-key Move, no door, no entry (see the coop section)
+            if (coopMode)                                                  // coop: no arrow-key Move; doors and entries are host requests (see the coop section)
             {
                 if (ActivePlayer != null) UpdatePlay();
                 else SetHint(HaltHint ?? coopHint);
@@ -710,7 +710,11 @@ namespace WordRoom.RoomDebug
         void LateUpdate()
         {
             StartPlayClock();                                                      // after every Update: the player's cursor/focus handling of this frame is done
-            if (coopMode) return;                                                  // coop: entries wait for the network step (no Enter here)
+            if (coopMode)
+            {
+                LateUpdateCoop();                                                  // coop: an entry is a request to the host
+                return;
+            }
             if (controlled == null || busy || halt != null || status != "running" || worldView == null) return;
             if (controlled != player || !controlled.Placed) return;                // TrackPlayer releases it next frame
             var to = controlled.transform.position;
@@ -1125,19 +1129,88 @@ namespace WordRoom.RoomDebug
             }
         }
 
-        // ---- coop (initial state confirmed by the host; doors and entries wait for the network step) -------------
-        // Coop mode is entered by the game's coop flow only. Every device shows the same host-confirmed initial copy
-        // (SessionCopy restored from the host's message, the host's own included); only the host holds a coordinator
-        // (the authority, not used for display). The single-player paths — StartGame/StartExperiment, arrow-key Move,
-        // Prepare (E) and Enter (walking through) — never run in coop mode. The player waits placed with walking locked
-        // until the common start, then may walk and look inside the start room and use the map; doors stay closed.
+        // ---- coop (every device shows the host's confirmed state; only the host's coordinator changes it) ---------
+        // Coop mode is entered by the game's coop flow only. Every device shows its own SessionCopy of the host's state:
+        // the initial copy, then each confirmed change applied in revision order (SessionCopy.Apply) or a full copy after
+        // a missed one — the host too, through the same messages; only the host holds a coordinator (the authority, never
+        // used for display). The single-player paths (StartGame/StartExperiment, arrow-key Move, solo Prepare and Enter)
+        // never run in coop mode. After the common start the local player opens a door with E (the door slides up here;
+        // one Prepare request goes to the host) or walks through an open, prepared doorway (one Enter request): walking
+        // stays locked while this device's one request waits, the 3D view always centers on this player's confirmed
+        // room, and another player's change only updates rooms, signs, doors and the map (never this player's place or
+        // view). A refusal closes the door again or puts the player back inside its confirmed room. A display failure
+        // stops this device only; the session goes on for the others.
         bool coopMode;
-        SessionCopy coopView;                // the confirmed initial state this device shows (independent copy)
+        SessionCopy coopView;                // the confirmed state this device shows (independent copy of one revision)
         string coopHint;                     // the coop flow's message on screen; null = none
         bool coopWaiting;                    // placed, waiting for the common start: walking locked by the coop gate
         string localPlayer = LocalPlayer;    // coop: this device's PlayerId (actor-N); single play: "local"
+        Func<RequestKind, GridPos, Direction, long, bool> coopSend;   // set by the coop flow: sends one request to the host
+        Func<string, string> coopName;       // display name of a PlayerId (set by the coop flow)
+        double coopWaitNotice = 10;          // a request unanswered this long is told as delayed (never cancelled)
+        CoopPending pending;                 // this device's one request waiting for the host; null = none
+        string coopShownWord;                // current word of the last shown copy (this player's confirmed room)
+        string coopEndText;                  // what the end of the session looks like here; null while running
+        string coopNote;                     // a short local message (a refusal), shown until coopNoteUntil
+        double coopNoteUntil;
+
+        const float ReturnDepth = 0.8f;      // a player whose entry was not confirmed is put back this far inside its room
+        const float NoteSeconds = 4f;
+
+        /// <summary>
+        /// This device's request waiting for the host (one at a time). Its outcome is known only from the host — the
+        /// answer, the answer to a query of the same RequestId, or this request's own confirmed change — never guessed
+        /// from the world (an open door or a prepared room may be another player's). Accepted and Failed also wait until
+        /// the shown copy has reached their revision.
+        /// </summary>
+        sealed class CoopPending
+        {
+            public long RequestId;
+            public RequestKind Kind;
+            public Direction Side;
+            public GridPos From;
+            public GridPos To;
+            public RoomConnection Door;      // Prepare: the door that slides up here
+            public double SentAt;
+            public RequestOutcome? Outcome;  // null = no outcome yet (also while the host reports it pending)
+            public long Target;              // Accepted: the confirming revision; Failed: the revision right after the error
+            public string Reason;            // Refused, Unknown or Failed: why
+            public bool Delayed;             // told as delayed (still waiting)
+        }
 
         public bool IsCoop => coopMode;
+
+        /// <summary>The session id of the state this device shows (coop; null before the initial state).</summary>
+        public string CoopSessionId => coopView?.SessionId;
+
+        /// <summary>The revision of the state this device shows (coop; 0 before the initial state).</summary>
+        public long CoopRevision => coopView?.Revision ?? 0;
+
+        /// <summary>This device's request whose outcome the host has not told yet (for a query of the same RequestId).</summary>
+        public bool TryGetCoopUnanswered(out long requestId, out double sentAt)
+        {
+            var p = pending;
+            requestId = p != null && p.Outcome == null ? p.RequestId : 0;
+            sentAt = p?.SentAt ?? 0;
+            return requestId != 0;
+        }
+
+        /// <summary>The revision this device's waiting request needs the shown copy to reach (its known outcome); 0 when none.</summary>
+        public long CoopAwaitedRevision => pending != null && pending.Outcome != null ? pending.Target : 0;
+
+        /// <summary>A short message of the coop flow on this device (e.g. the host failing to bring a participant up to date).</summary>
+        public void NotifyCoop(string text) => ShowNote(text);
+
+        /// <summary>
+        /// The coop flow's part for play: how a request reaches the host (false = it could not be sent), how long an
+        /// unanswered request waits before it is told as delayed, and the display name of a PlayerId.
+        /// </summary>
+        public void SetCoopPlay(Func<RequestKind, GridPos, Direction, long, bool> send, double waitNoticeSeconds, Func<string, string> nameOf)
+        {
+            coopSend = send;
+            coopWaitNotice = waitNoticeSeconds;
+            coopName = nameOf;
+        }
 
         /// <summary>
         /// Enters coop mode for this scene (before anything is shown): no single-player start, the previous state and
@@ -1150,6 +1223,8 @@ namespace WordRoom.RoomDebug
             coopMode = true;
             coopView = null;
             coopWaiting = false;
+            pending = null;
+            coopShownWord = coopEndText = coopNote = null;
             dataset = d;
             localPlayer = localPlayerId;
             session = null;
@@ -1206,7 +1281,8 @@ namespace WordRoom.RoomDebug
                     return (c, r.Captured);
                 }, token);
                 if (this == null || token.IsCancellationRequested || !coopMode) return;
-                session = created;                                         // the authority (exploration requests come with the network step)
+                session = created;                                         // the authority of every exploration request
+                created.UseEndClock(RealtimeClockForWorkers());            // the goal entry's end: read when it is confirmed, on the play clock's axis
                 done(copy, created.Config, null);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -1272,14 +1348,15 @@ namespace WordRoom.RoomDebug
             coopWaiting = true;
             controlled.SetMovementLocked(true);                            // the coop gate: look yes, walking and doors not yet
             lastPosition = controlled.transform.position;
+            coopShownWord = snapshot.CurrentWord;
             SetHudWords(snapshot.CurrentWord, snapshot.TargetWord);
             return true;
         }
 
         /// <summary>
-        /// The common start: walking resumes (start room only — doors stay shut) and, on the host, the session's one
-        /// time base is set to `localStartRealtime`, the common server-time start converted to this device's clock
-        /// (never the moment this device became controllable).
+        /// The common start: walking, doors and entries begin and, on the host, the session's one time base is set to
+        /// `localStartRealtime`, the common server-time start converted to this device's clock (never the moment this
+        /// device became controllable).
         /// </summary>
         public void BeginCoopPlay(double localStartRealtime)
         {
@@ -1287,6 +1364,28 @@ namespace WordRoom.RoomDebug
             coopWaiting = false;
             if (controlled != null && halt == null) controlled.SetMovementLocked(status != "running");
             if (session != null) session.StartPlayClock(localStartRealtime);
+        }
+
+        /// <summary>
+        /// A clock on this device's real-time axis (Time.realtimeSinceStartupAsDouble, the play clock's) that any thread
+        /// may read: the high-resolution Stopwatch plus the offset measured now, on the main thread. No engine API is
+        /// called when it is read (the coordinator reads it on its worker, inside the request's lock).
+        /// </summary>
+        static Func<double> RealtimeClockForWorkers()
+        {
+            var frequency = (double)System.Diagnostics.Stopwatch.Frequency;
+            var offset = Time.realtimeSinceStartupAsDouble - System.Diagnostics.Stopwatch.GetTimestamp() / frequency;
+            return () => System.Diagnostics.Stopwatch.GetTimestamp() / frequency + offset;
+        }
+
+        /// <summary>
+        /// The coop flow's stop reason, shown now: stops this device when it is not stopped yet, otherwise replaces the
+        /// shown reason (e.g. the host's report of which participants confirmed a shared stop). Never resumes play.
+        /// </summary>
+        public void ReportCoopHalt(string reason)
+        {
+            if (halt == null) HaltCoop(reason);
+            else halt = reason;
         }
 
         /// <summary>Coop play cannot go on on this device (connection ended, start failed): stops with the reason on screen.</summary>
@@ -1297,13 +1396,343 @@ namespace WordRoom.RoomDebug
             else ReportFatal(reason);
         }
 
+        /// <summary>
+        /// Coop player mode, once per frame: the hint (the flow's message, the end of the session, a refusal, a delayed
+        /// request) and, while exploring with no request waiting, the door under the screen center — E slides it up here
+        /// and sends one Prepare request (same aim and E rules as single play, also with the map shown).
+        /// </summary>
         void UpdateCoopPlay()
         {
-            var text = coopHint;
-            if (text == null && controlled != null && !coopWaiting && worldView != null && controlled.CanInteract &&
-                controlled.TryGetAimedDoor(DoorReach, out var door) && worldView.CanOpen(door, out _))
-                text = "협동에서는 아직 문을 열 수 없습니다";               // no Prepare in coop at this stage
+            var now = Time.realtimeSinceStartupAsDouble;
+            if (pending != null && !pending.Delayed && now - pending.SentAt >= coopWaitNotice) pending.Delayed = true;
+            var text = coopHint ?? coopEndText;
+            if (text == null && coopNote != null && now < coopNoteUntil) text = coopNote;
+            if (text == null && pending != null && pending.Delayed)
+                text = pending.Kind == RequestKind.Enter
+                    ? "호스트의 입장 확인이 늦어지고 있습니다. 계속 기다리거나 Esc로 메인 메뉴에 나갈 수 있습니다"
+                    : "호스트의 문 열기 확인이 늦어지고 있습니다. 계속 기다리거나 Esc로 메인 메뉴에 나갈 수 있습니다";
+            if (text == null && CanUseCoopDoors && controlled.TryGetAimedDoor(DoorReach, out var door) && worldView.CanOpen(door, out var id))
+            {
+                if (controlled.InteractPressed && worldView.OpenDoor(id, out var side)) SendCoop(RequestKind.Prepare, side, id);   // prompt cleared
+                else text = "[E] 문 열기";
+            }
             SetHint(text);
+        }
+
+        bool CanUseCoopDoors =>
+            controlled != null && halt == null && !coopWaiting && pending == null && status == "running" && coopView != null && worldView != null && controlled.CanInteract;
+
+        /// <summary>
+        /// After every Update in coop: one entry at most, when this player's path in this frame went 0.15m past the
+        /// boundary of its confirmed room through a passable doorway — walking stops and one Enter request goes to the
+        /// host. Nothing is checked while a request of this device waits (no second entry), before the common start or
+        /// after the end.
+        /// </summary>
+        void LateUpdateCoop()
+        {
+            if (controlled == null || halt != null || coopWaiting || pending != null || status != "running" || coopView == null || worldView == null) return;
+            if (controlled != player || !controlled.Placed) return;              // TrackPlayer releases it next frame
+            var to = controlled.transform.position;
+            var from = lastPosition;
+            lastPosition = to;
+            if (worldView.TryDetectEntry(from, to, out var side)) SendCoop(RequestKind.Enter, side, default);
+        }
+
+        /// <summary>
+        /// One request of this device to the host, from its confirmed room (sent as ExpectedFrom). Walking stops until
+        /// the answer (look, gravity, Escape and the map go on); nothing is shown as done before the host confirms it.
+        /// A request that cannot be sent is handled like a refusal at once (the door closes again, the player goes back).
+        /// </summary>
+        void SendCoop(RequestKind kind, Direction side, RoomConnection door)
+        {
+            var from = coopView.PlayerPosition(localPlayer);
+            var p = new CoopPending
+            {
+                RequestId = ++nextRequest, Kind = kind, Side = side, From = from, To = from.Add(Directions.Offset(side)), Door = door,
+                SentAt = Time.realtimeSinceStartupAsDouble,
+            };
+            controlled.SetMovementLocked(true);
+            pending = p;
+            coopNote = null;
+            SetHint(null);
+            var sent = false;
+            try
+            {
+                sent = coopSend != null && coopSend(kind, from, side, p.RequestId);
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+            }
+            if (sent) return;
+            p.Outcome = RequestOutcome.Unknown;                                   // never reached the host: nothing changed there
+            p.Reason = "요청을 호스트에게 보낼 수 없습니다";
+            TryCompletePending();
+        }
+
+        /// <summary>
+        /// The host's outcome of one of this device's requests — its answer or the answer to a query of the same RequestId.
+        /// Only the waiting request counts and only its first known outcome (a later, repeated or other answer changes
+        /// nothing; a completed request's late answer never touches a newer one). Pending keeps waiting.
+        /// </summary>
+        public void ApplyCoopReply(long requestId, RequestOutcome outcome, long revision, string reason)
+        {
+            var p = pending;
+            if (!coopMode || p == null || p.RequestId != requestId || p.Outcome != null || outcome == RequestOutcome.Pending) return;
+            p.Outcome = outcome;
+            p.Target = outcome == RequestOutcome.Accepted || outcome == RequestOutcome.Failed ? revision : 0;
+            p.Reason = !string.IsNullOrEmpty(reason) ? reason
+                : outcome == RequestOutcome.Unknown ? "호스트가 요청을 받지 못했습니다" : outcome == RequestOutcome.Failed ? "호스트에서 처리 중 오류가 났습니다" : "호스트가 요청을 거절했습니다";
+            TryCompletePending();
+        }
+
+        /// <summary>
+        /// Ends the waiting request once its outcome is known and, for Accepted or Failed, the shown copy has reached that
+        /// revision: Refused or Unknown (nothing changed at the host) closes the door again or puts the player back inside
+        /// its confirmed room; Accepted needs, for an entry, this player's confirmed room to be the entered one, shown, with
+        /// the floor under the player that room's; Failed (the host's state after an error, now shown) follows that state —
+        /// an entry stands if this player's confirmed room is the entered one, otherwise the player goes back; a door stays
+        /// open only if the state has it open. Only this request's walking lock is lifted (menus keep their own block);
+        /// walking resumes where the player stands, nothing is re-placed or turned.
+        /// </summary>
+        void TryCompletePending()
+        {
+            var p = pending;
+            if (p == null || coopView == null || p.Outcome == null) return;
+            var outcome = p.Outcome.Value;
+            if ((outcome == RequestOutcome.Accepted || outcome == RequestOutcome.Failed) && coopView.Revision < p.Target) return;   // that revision is not shown yet
+            pending = null;
+            if (controlled == null || halt != null) return;
+            if (outcome != RequestOutcome.Accepted)
+            {
+                Debug.Log($"[협동] 요청 {p.RequestId} {(outcome == RequestOutcome.Failed ? "처리 오류" : "거절")}: {p.Reason}");
+                var what = p.Kind == RequestKind.Prepare ? "문을 열 수 없습니다" : "입장할 수 없습니다";
+                ShowNote(outcome == RequestOutcome.Failed ? $"{what} — {p.Reason}. 호스트의 현재 상태로 맞췄습니다" : $"{what} — {p.Reason}");
+            }
+            var entered = p.Kind == RequestKind.Enter && coopView.PlayerPosition(localPlayer) == p.To;
+            if (p.Kind == RequestKind.Prepare)
+            {
+                if (outcome != RequestOutcome.Accepted && worldView != null) worldView.RevertOpening(p.Door);   // stays open when the shown state has it open
+            }
+            else if (outcome == RequestOutcome.Accepted || (outcome == RequestOutcome.Failed && entered))
+            {
+                var here = coopView.PlayerPosition(localPlayer);
+                string failure = null;
+                if (!entered) failure = $"확정된 위치 {here}가 입장한 방 {p.To}와 다릅니다";
+                else if (!worldView.TryGetShownRoom(here, out var room)) failure = $"도착 방 {here}이 3D로 표시되지 않았습니다";
+                else controlled.IsOnFloorOf(room, out failure);
+                if (failure != null)
+                {
+                    Halt(failure);
+                    return;
+                }
+                SetHudWords(coopShownWord, hudTarget);                             // entry confirmed and shown: new current room, same target
+            }
+            else if (!ReturnInside(p.Side)) return;
+            lastPosition = controlled.transform.position;
+            controlled.SetMovementLocked(status != "running");
+        }
+
+        /// <summary>An entry that was not confirmed: the player goes back inside its confirmed room, by the doorway it crossed (facing kept).</summary>
+        bool ReturnInside(Direction side)
+        {
+            var here = coopView.PlayerPosition(localPlayer);
+            string failure;
+            if (worldView == null || !worldView.TryGetShownRoom(here, out var room) || !worldView.TryGetInsidePoint(here, side, ReturnDepth, out var point))
+                failure = $"확정된 방 {here}이 3D로 표시되지 않았습니다";
+            else controlled.MoveOnto(room, point, out failure);
+            if (failure == null) return true;
+            Halt($"입장이 확정되지 않아 원래 방으로 돌아가지 못했습니다 — {failure}");
+            return false;
+        }
+
+        void ShowNote(string text)
+        {
+            coopNote = text;
+            coopNoteUntil = Time.realtimeSinceStartupAsDouble + NoteSeconds;
+        }
+
+        /// <summary>
+        /// One confirmed change of the host (any player's) for the copy this device shows: Applied (the copy, map and
+        /// view follow it), Ignored (another session's, or a revision already shown) or Gap (a revision is missing, or
+        /// the change does not fit this copy — `failure` says why; nothing applied, the whole state is needed).
+        /// </summary>
+        public CoopChangeResult ApplyCoopChange(SessionChange c, out string failure)
+        {
+            failure = null;
+            if (!coopMode || coopView == null || c == null || c.SessionId != coopView.SessionId || c.Revision <= coopView.Revision) return CoopChangeResult.Ignored;
+            SessionCopy next;
+            try
+            {
+                next = coopView.Apply(c);
+            }
+            catch (ArgumentException e)
+            {
+                failure = e.Message;
+                return CoopChangeResult.Gap;
+            }
+            SyncCoopMap(c, next);
+            AdoptCoopState(next);
+            if (pending != null && pending.Outcome == null && c.PlayerId == localPlayer && c.RequestId == pending.RequestId)
+            {
+                pending.Outcome = RequestOutcome.Accepted;                         // this request's own confirmed change
+                pending.Target = c.Revision;
+            }
+            TryCompletePending();
+            return CoopChangeResult.Applied;
+        }
+
+        /// <summary>
+        /// The host's whole state of a later revision (after a missed change, or sent by the host to a device behind). The
+        /// world is brought up to date only: a waiting request's outcome still comes from the host (a query of its
+        /// RequestId), never from what the state shows. This player's confirmed room may differ only by its own waiting
+        /// entry; anything else fails with the reason (play stops on this device).
+        /// </summary>
+        public bool ApplyCoopCopy(SessionCopy copy, out string failure)
+        {
+            failure = null;
+            if (!coopMode || coopView == null || copy == null) return false;
+            var theirs = copy.SessionId == coopView.SessionId ? copy.FindPlayer(localPlayer) : null;
+            if (theirs == null)
+            {
+                failure = "다른 세션이거나 내 플레이어가 없는 상태입니다";
+                return false;
+            }
+            if (copy.Revision <= coopView.Revision) return true;                  // nothing newer
+            var mine = coopView.PlayerPosition(localPlayer);
+            var entering = pending != null && pending.Kind == RequestKind.Enter && theirs.Position == pending.To;
+            if (theirs.Position != mine && !entering)
+            {
+                failure = $"내 확정 위치가 {mine}에서 {theirs.Position}로 설명 없이 바뀌었습니다";
+                return false;
+            }
+            SyncCoopMap(null, copy);
+            AdoptCoopState(copy);
+            TryCompletePending();
+            return true;
+        }
+
+        /// <summary>The copy becomes the shown state: status, the end text, the 3D view around this player's confirmed room.</summary>
+        void AdoptCoopState(SessionCopy next)
+        {
+            coopView = next;
+            status = next.Status;
+            if (status != "running" && coopEndText == null)
+            {
+                coopEndText = CoopEndText(next);
+                Debug.Log($"[협동] 탐색 종료 — {coopEndText.Replace("\n", " / ")}");
+            }
+            if (halt != null || controlled == null) return;
+            ShowCoopState();
+        }
+
+        /// <summary>
+        /// The shown copy around this player's confirmed room (never moved for another player's change). A display failure
+        /// stops this device only. After the end, walking stops (look and Escape go on) once no entry of this device waits.
+        /// </summary>
+        void ShowCoopState()
+        {
+            var radius = GameSettings.DisplayRadius;
+            RoomViewSnapshot snapshot;
+            try
+            {
+                snapshot = RoomViewSnapshot.Capture(coopView, localPlayer, dataset.GetWord, radius);
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                Halt("확정 상태의 표시 정보를 만들지 못했습니다");
+                return;
+            }
+            if (!ShowView(snapshot, out var failure))
+            {
+                Halt($"확정 상태 표시 준비 실패 — {failure}");
+                return;
+            }
+            shownRadius = radius;
+            coopShownWord = snapshot.CurrentWord;
+            if (status != "running" && pending == null) controlled.SetMovementLocked(true);
+        }
+
+        /// <summary>The explored map follows the shown copy: the change itself, or the whole copy (full state, late tracking, or a map gap).</summary>
+        void SyncCoopMap(SessionChange c, SessionCopy next)
+        {
+            if (!TrackExploredMap) return;
+            if (c != null && !mapResync && exploredMap.HasData && exploredMap.Apply(MapUpdate.FromSessionChange(c, next, dataset.GetWord), out _) != MapApplyResult.Gap) return;
+            if (exploredMap.Apply(MapUpdate.FromCopy(next, dataset.GetWord), out _) == MapApplyResult.Applied) mapResync = false;
+        }
+
+        /// <summary>What the end of the session looks like on this device (the existing Escape → main menu stays the way out).</summary>
+        string CoopEndText(SessionCopy c)
+        {
+            const string exit = "Esc로 메인 메뉴에 돌아갈 수 있습니다";
+            if (c.Status != "success") return $"탐색 종료: {StatusText.Korean(c.Status)}\n{exit}";
+            var r = c.Result;
+            if (r == null) return $"목표 도달 — 탐색이 끝났습니다\n{exit}";
+            var who = r.ReachedBy == localPlayer ? "내가 목표 방에 도착했습니다" : $"{(coopName != null ? coopName(r.ReachedBy) : r.ReachedBy)}이(가) 목표 방에 도착했습니다";
+            var time = double.IsNaN(r.Seconds) ? "" : $"소요 {r.Seconds:0.0}초, ";
+            var mine = r.TryGetPlayer(localPlayer, out var p) ? $", 내 방문 {p.VisitedRooms}개" : "";
+            return $"목표 도달 — {who}\n{time}팀 방문 {r.TeamVisitedRooms}개{mine}\n{exit}";
+        }
+
+        // ---- coop host (the authority: requests in, confirmed changes out; display goes through the messages) -------
+        /// <summary>
+        /// Host only: one request (this host's own or a participant's, PlayerId from the real sender) checked and applied
+        /// by the coordinator on the worker — all checks, the change and its confirmed revision inside its lock — then
+        /// `done` on the main thread with the outcome: the change to send to everyone (a first accepted request), the
+        /// first outcome again for a duplicate (no change, no new copy), a refusal (nothing changed), or Failed — an error
+        /// while it was applied: the state may have changed partly, so it is never answered as a refusal (the coordinator
+        /// recorded it: the same request is never applied again). Nothing is shown here.
+        /// </summary>
+        public async void SubmitCoopHost(SessionRequest request, Action<CoopHostOutcome> done)
+        {
+            var s = session;
+            if (!coopMode || s == null || cts == null)
+            {
+                done(CoopHostOutcome.Refused("호스트 세션이 준비되지 않았습니다"));   // nothing was run
+                return;
+            }
+            var token = cts.Token;
+            try
+            {
+                var result = await Task.Run(() => s.Submit<bool>(request, null, token), token);
+                if (this == null || token.IsCancellationRequested || s != session) return;   // the scene or game ended: nothing is sent
+                done(CoopHostOutcome.From(result));
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                if (this != null && s == session && !token.IsCancellationRequested) done(CoopHostOutcome.Failed("호스트에서 요청을 처리하는 중 오류가 났습니다"));
+            }
+        }
+
+        /// <summary>Host only: the whole current state (world, players, session and result of one revision) and the fixed settings, read on the worker.</summary>
+        public async void ReadCoopHost(Action<SessionCopy, GenerationConfig, string> done)
+        {
+            var s = session;
+            if (!coopMode || s == null || cts == null)
+            {
+                done(null, null, "호스트 세션이 준비되지 않았습니다");
+                return;
+            }
+            var token = cts.Token;
+            try
+            {
+                var copy = await Task.Run(() => s.Read(r => r.CopyAll()), token);
+                if (this == null || token.IsCancellationRequested || s != session) return;
+                done(copy, s.Config, null);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                if (this != null && s == session && !token.IsCancellationRequested) done(null, null, "호스트에서 전체 상태를 읽지 못했습니다");
+            }
         }
 
         /// <summary>A display radius change in coop: the same confirmed copy captured again (nothing generated).</summary>
@@ -1456,6 +1885,46 @@ namespace WordRoom.RoomDebug
                         : reason;
             }
         }
+    }
+
+    /// <summary>What applying one confirmed coop change did (see RoomGenerationDebug.ApplyCoopChange).</summary>
+    public enum CoopChangeResult
+    {
+        Applied,
+        /// <summary>Another session's change or a revision already shown: nothing to do.</summary>
+        Ignored,
+        /// <summary>A revision is missing (or the change does not fit the shown copy): the whole state is needed.</summary>
+        Gap,
+    }
+
+    /// <summary>
+    /// The host coordinator's outcome of one coop request: Accepted (Revision = the confirmed revision; Change = the
+    /// change to send to everyone, only for a first accepted request — a duplicate gets its first outcome again with no
+    /// change and no new copy), Refused (checked and refused: nothing changed) or Failed (an error while it was applied:
+    /// the state may have changed; Revision is the revision after it when the coordinator reported one, else 0 — the
+    /// caller reads the state). Refusal is the reason of Refused or Failed.
+    /// </summary>
+    public sealed class CoopHostOutcome
+    {
+        public RequestOutcome Outcome { get; private set; }
+        public bool Accepted => Outcome == RequestOutcome.Accepted;
+        public bool Duplicate { get; private set; }
+        public long Revision { get; private set; }
+        public string Refusal { get; private set; }
+        public SessionChange Change { get; private set; }
+
+        internal static CoopHostOutcome From(RequestResult<bool> r) => new CoopHostOutcome
+        {
+            Outcome = r.Accepted ? RequestOutcome.Accepted : r.Failure != null ? RequestOutcome.Failed : RequestOutcome.Refused,
+            Duplicate = r.Duplicate,
+            Revision = r.Accepted ? r.Update.Revision : r.Failure != null ? r.FailedRevision : 0,
+            Refusal = r.Refusal ?? r.Failure,
+            Change = r.Accepted && !r.Duplicate ? SessionChange.FromUpdate(r.Update) : null,
+        };
+
+        internal static CoopHostOutcome Refused(string reason) => new CoopHostOutcome { Outcome = RequestOutcome.Refused, Refusal = reason };
+
+        internal static CoopHostOutcome Failed(string reason) => new CoopHostOutcome { Outcome = RequestOutcome.Failed, Refusal = reason };
     }
 
     static class NullableExtensions

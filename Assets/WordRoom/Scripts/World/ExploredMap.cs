@@ -51,6 +51,23 @@ namespace WordRoom.World
             return m;
         }
 
+        /// <summary>
+        /// A host's confirmed change as applied to this device's copy (`after` = the copy of the change's revision):
+        /// the rooms its fill added, the team's first visit and the requester's room of an entry.
+        /// </summary>
+        public static MapUpdate FromSessionChange(SessionChange c, SessionCopy after, Func<int, string> wordText)
+        {
+            var m = new MapUpdate { Session = c.SessionId, Revision = c.Revision };
+            foreach (var kv in c.Added)
+                m.rooms.Add(new MapRoom { Position = kv.Key, Word = wordText(kv.Value), Visited = after.IsTeamVisited(kv.Key), IsTarget = kv.Value == after.TargetWord });
+            if (c.Kind == RequestKind.Enter)
+            {
+                if (c.TeamFirstVisit) m.visited.Add(c.To);
+                m.players.Add(new KeyValuePair<string, GridPos>(c.PlayerId, c.To));
+            }
+            return m;
+        }
+
         /// <summary>The whole map of one revision from a full session copy (any thread; the copy is independent).</summary>
         public static MapUpdate FromCopy(SessionCopy c, Func<int, string> wordText)
         {

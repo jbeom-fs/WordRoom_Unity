@@ -234,6 +234,8 @@ namespace WordRoom.Generation
         public List<GridPos> TeamVisited = new List<GridPos>();
         public List<RoomConnection> OpenDoors = new List<RoomConnection>();
         public List<Player> Players = new List<Player>();
+        /// <summary>The host's confirmed result (only with Status "success"); null otherwise.</summary>
+        public SessionResult Result;
     }
 
     /// <summary>
@@ -272,6 +274,7 @@ namespace WordRoom.Generation
         readonly Dictionary<GridPos, int> wordAt = new Dictionary<GridPos, int>();
         readonly HashSet<GridPos> preparedSet = new HashSet<GridPos>();
         readonly HashSet<RoomConnection> openSet = new HashSet<RoomConnection>();
+        readonly HashSet<GridPos> teamSet = new HashSet<GridPos>();
 
         SessionCopy()
         {
@@ -309,6 +312,7 @@ namespace WordRoom.Generation
             foreach (var r in Rooms) wordAt[r.Position] = r.Word;
             foreach (var p in Prepared) preparedSet.Add(p);
             foreach (var d in OpenDoors) openSet.Add(d);
+            foreach (var p in TeamVisited) teamSet.Add(p);
         }
 
         public PlayerCopy FindPlayer(string playerId) => Players.FirstOrDefault(p => p.Id == playerId);
@@ -321,6 +325,106 @@ namespace WordRoom.Generation
         public bool HasRoom(GridPos p) => wordAt.ContainsKey(p);
         public bool IsPrepared(GridPos p) => preparedSet.Contains(p);
         public DoorState Door(RoomConnection id) => openSet.Contains(id) ? DoorState.Open : DoorState.Closed;
+        public bool IsTeamVisited(GridPos p) => teamSet.Contains(p);
+
+        // ---- confirmed change ------------------------------------------------------------------------------
+        /// <summary>
+        /// A new copy one revision later: `c` (the host's confirmed change of revision Revision + 1) applied to this one,
+        /// then checked as a whole like Restore. Checks the change itself against this state the way the coordinator
+        /// confirmed it: same session, the next revision, a running session, a registered requester standing in From,
+        /// To adjacent and existing; Prepare — rooms added only on empty coordinates next to To, the door stored Open
+        /// exactly when it was closed, To prepared, nobody moved; Enter — no rooms added, the door Open and To prepared,
+        /// the requester's moves one more and the team's first visit as reported. Throws ArgumentException with the
+        /// reason (nothing applied); this copy never changes.
+        /// </summary>
+        public SessionCopy Apply(SessionChange c)
+        {
+            if (c == null) throw new ArgumentException("변경이 없습니다.");
+            if (c.SessionId != SessionId) throw new ArgumentException($"다른 세션의 변경입니다({c.SessionId}).");
+            if (c.Revision != Revision + 1) throw new ArgumentException($"변경 순번이 이어지지 않습니다(보유 {Revision}, 받은 {c.Revision}).");
+            if (Status != "running") throw new ArgumentException($"끝난 세션의 변경입니다({Status}).");
+            var player = FindPlayer(c.PlayerId) ?? throw new ArgumentException($"등록되지 않은 플레이어의 변경입니다({c.PlayerId}).");
+            if (c.From != player.Position) throw new ArgumentException($"{c.PlayerId}의 확정 위치 {player.Position}가 변경의 출발 {c.From}와 다릅니다.");
+            if (GridPos.Distance(c.From, c.To) != 1 || !HasRoom(c.To)) throw new ArgumentException($"{c.From}→{c.To}는 인접한 기존 방이 아닙니다.");
+            if (string.IsNullOrEmpty(c.Status)) throw new ArgumentException("변경의 세션 상태가 비어 있습니다.");
+            var id = RoomConnection.Between(c.From, c.To);
+            var parts = ToParts();
+            parts.Revision = c.Revision;
+            parts.Status = c.Status;
+            parts.Result = c.Result ?? Result;
+            var p = parts.Players.First(x => x.Id == c.PlayerId);
+            switch (c.Kind)
+            {
+                case RequestKind.Prepare:
+                    if (c.Moves != player.Moves || c.Status != Status) throw new ArgumentException("문 열기 변경이 이동 수나 세션 상태를 바꿉니다.");
+                    if (c.DoorOpened == (Door(id) == DoorState.Open)) throw new ArgumentException($"문 {id}의 열림 기록이 현재 상태와 맞지 않습니다.");
+                    foreach (var kv in c.Added)
+                    {
+                        if (HasRoom(kv.Key) || GridPos.Distance(kv.Key, c.To) != 1) throw new ArgumentException($"추가된 방 {kv.Key}의 위치가 올바르지 않습니다.");
+                        parts.Rooms.Add(kv);                               // Restore refuses a coordinate added twice
+                    }
+                    if (c.DoorOpened) parts.OpenDoors.Add(id);
+                    if (!IsPrepared(c.To)) parts.Prepared.Add(c.To);
+                    break;
+                case RequestKind.Enter:
+                    if (c.Added.Count > 0 || c.DoorOpened) throw new ArgumentException("입장 변경에 방 생성·문 열기가 있습니다.");
+                    if (Door(id) != DoorState.Open || !IsPrepared(c.To)) throw new ArgumentException($"{c.To}로 가는 문이 열리지 않았거나 준비 전입니다.");
+                    if (c.Moves != player.Moves + 1) throw new ArgumentException($"{c.PlayerId}의 이동 수가 이어지지 않습니다(보유 {player.Moves}, 받은 {c.Moves}).");
+                    if (c.TeamFirstVisit == IsTeamVisited(c.To)) throw new ArgumentException($"{c.To}의 팀 첫 방문 여부가 현재 상태와 맞지 않습니다.");
+                    p.Position = c.To;
+                    p.Moves = c.Moves;
+                    var at = p.Visits.FindIndex(v => v.Key == c.To);
+                    if (at < 0) p.Visits.Add(new KeyValuePair<GridPos, int>(c.To, 1));
+                    else p.Visits[at] = new KeyValuePair<GridPos, int>(c.To, p.Visits[at].Value + 1);
+                    p.Path.Add(c.To);
+                    if (c.TeamFirstVisit) parts.TeamVisited.Add(c.To);
+                    break;
+                default:
+                    throw new ArgumentException($"협동 변경으로 적용할 수 없는 종류입니다({c.Kind}).");
+            }
+            return Restore(parts);
+        }
+
+        /// <summary>
+        /// Whether this copy describes one consistent state by Restore's rules (e.g. the host's state after an error in a
+        /// request, before it is sent to everyone). False with the reason otherwise.
+        /// </summary>
+        public bool Validate(out string why)
+        {
+            try
+            {
+                Restore(ToParts());
+                why = null;
+                return true;
+            }
+            catch (ArgumentException e)
+            {
+                why = e.Message;
+                return false;
+            }
+        }
+
+        /// <summary>The values of this copy as new, independent parts (Restore of them gives an equal copy).</summary>
+        SessionCopyParts ToParts()
+        {
+            var parts = new SessionCopyParts
+            {
+                SessionId = SessionId, Mode = Mode, Revision = Revision, StartWord = StartWord, TargetWord = TargetWord, Seed = Seed,
+                PackageId = PackageId, Status = Status, Result = Result,
+            };
+            foreach (var r in Rooms) parts.Rooms.Add(new KeyValuePair<GridPos, int>(r.Position, r.Word));
+            parts.Prepared.AddRange(Prepared);
+            parts.TeamVisited.AddRange(TeamVisited);
+            parts.OpenDoors.AddRange(OpenDoors);
+            foreach (var p in Players)
+            {
+                var copy = new SessionCopyParts.Player { Id = p.Id, Position = p.Position, Moves = p.Moves };
+                copy.Visits.AddRange(p.Visits);
+                copy.Path.AddRange(p.Path);
+                parts.Players.Add(copy);
+            }
+            return parts;
+        }
 
         // ---- restore ------------------------------------------------------------------------------------------
         /// <summary>
@@ -328,7 +432,8 @@ namespace WordRoom.Generation
         /// origin with the start word, no coordinate twice, prepared / team-visited / door coordinates on existing rooms
         /// (doors between adjacent existing rooms), unique players standing in existing rooms they visited, paths ending
         /// there, and every personal visit inside the team's. Throws ArgumentException with the reason otherwise.
-        /// Recent words, unfilled records, generation records and results are not part of a restored copy.
+        /// Recent words, unfilled records and generation records are not part of a restored copy; a result is kept only
+        /// with the status "success" and a revision not after the copy's.
         /// </summary>
         public static SessionCopy Restore(SessionCopyParts parts)
         {
@@ -375,6 +480,8 @@ namespace WordRoom.Generation
                     throw new ArgumentException($"{p.Id}의 경로가 올바르지 않습니다.");
                 players.Add(new PlayerCopy(p));
             }
+            if (parts.Result != null && (parts.Status != "success" || parts.Result.Revision > parts.Revision || !ids.Contains(parts.Result.ReachedBy)))
+                throw new ArgumentException("세션 결과가 상태·순번·참가자와 맞지 않습니다.");
             var c = new SessionCopy
             {
                 SessionId = parts.SessionId,
@@ -387,6 +494,7 @@ namespace WordRoom.Generation
                 Started = true,
                 Status = parts.Status,
                 PlayStartedAt = double.NaN,
+                Result = parts.Result,
                 Rooms = records.AsReadOnly(),
                 Prepared = Array.AsReadOnly(prepared.OrderBy(p => p).ToArray()),
                 Unfilled = Array.AsReadOnly(new UnfilledCopy[0]),

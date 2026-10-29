@@ -218,6 +218,33 @@ namespace WordRoom.World
         }
 
         /// <summary>
+        /// Puts the feet on the floor of `room` below `point` keeping the facing and view as they are, and stops any
+        /// fall (e.g. back inside the confirmed room after an entry that was not confirmed). Only for a placed player;
+        /// false with the reason (nothing moved) when that floor is not `room`'s.
+        /// </summary>
+        public bool MoveOnto(Transform room, Vector3 point, out string failure)
+        {
+            if (!Placed)
+            {
+                failure = "배치되지 않은 플레이어입니다";
+                return false;
+            }
+            Physics.SyncTransforms();
+            var floor = FloorBelow(point);
+            if (floor == null || !floor.Value.collider.transform.IsChildOf(room))
+            {
+                failure = $"방 '{room.name}' 안쪽 지점 아래에서 이 방의 바닥을 찾지 못했습니다";
+                return false;
+            }
+            controller.enabled = false;
+            transform.position = floor.Value.point + Vector3.up * controller.skinWidth;
+            controller.enabled = true;
+            verticalSpeed = 0f;
+            failure = null;
+            return true;
+        }
+
+        /// <summary>
         /// Whether the first floor below the player's current position (same ray rules as PlaceAt) belongs to `room`.
         /// Position and view are left as they are.
         /// </summary>
