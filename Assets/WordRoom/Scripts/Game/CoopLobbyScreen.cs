@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
+using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 using WordRoom.Network;
 
@@ -19,6 +20,11 @@ namespace WordRoom.Game
     /// never creates a room), 뒤로. "No connection yet", "waiting for the list" and "no rooms" are told apart.
     /// 새로고침 (optional reference) receives the list anew through CoopLobby; while it runs the rows are hidden and no
     /// room request is offered, and the selection is kept by Room.Name until a received list decides on it.
+    /// A double click (two left clicks of one pointer within 0.3 s, unscaled time, on the same row still showing the
+    /// same Room.Name) joins that room through the same path as 입장, under the same conditions as its button; a single
+    /// click selects at once as before (the button's onClick), never delayed. The earlier click is dropped when the
+    /// list data changes, a refresh starts, the create panel opens, the lobby cannot be used, the screen closes or is
+    /// disabled, the application loses focus, and right before a join (a failed join needs two new clicks).
     /// Waiting room: display name, RoomCode with 복사, count, participants with host and ready badges, the local
     /// ready toggle, 나가기 (the lobby comes back once Photon confirmed the leave), the host's difficulty (쉬움·보통·어려움,
     /// 보통 first; only the host can change it, a change voids every ready) and 시작 — enabled for the host only while
@@ -56,6 +62,13 @@ namespace WordRoom.Game
         Color[] difficultyNormal;
         bool hasRefresh;
         bool shownHidden;                   // the rows were drawn hidden (a refresh ran)
+
+        const float DoubleClickSeconds = 0.3f;
+        CoopRoomRow clickRow;               // the first click of a possible double click; null = none
+        int clickBinding;
+        int clickPointer;
+        string clickRoom;
+        float clickTime;
 
         /// <summary>Raised when the screen closed back to the main menu.</summary>
         public event Action Closed;
@@ -130,6 +143,15 @@ namespace WordRoom.Game
             if (!ready) return;
             if (view != null && view.codeInput != null) view.codeInput.onSubmit.RemoveListener(submitCode);
             if (lobby != null) lobby.Changed -= Refresh;
+            foreach (var row in rows)
+                if (row != null) row.Clicked -= RowClicked;
+        }
+
+        void OnDisable() => ForgetClick();
+
+        void OnApplicationFocus(bool focus)
+        {
+            if (!focus) ForgetClick();
         }
 
         /// <summary>From the main menu. False when the screen cannot be used (reported once in Awake).</summary>
@@ -156,6 +178,7 @@ namespace WordRoom.Game
             if (!open) return;
             open = false;
             createOpen = false;
+            ForgetClick();
             lobby.Exit();
             view.gameObject.SetActive(false);
             var handlers = Closed;
@@ -197,6 +220,7 @@ namespace WordRoom.Game
         /// <summary>새로고침: CoopLobby leaves and joins the lobby again; the screen follows its phase (a second click is refused there too).</summary>
         void RefreshList()
         {
+            ForgetClick();
             ClearLocalMessage();
             lobby.RefreshList();
         }
@@ -209,16 +233,63 @@ namespace WordRoom.Game
             Refresh();
         }
 
+        /// <summary>
+        /// A row's left click (besides its onClick, which selects; neither relies on the other's order). The second one
+        /// in time on the same row, pointer and Room.Name joins that very room — never `selected`, which may differ by then.
+        /// </summary>
+        void RowClicked(CoopRoomRow row, PointerEventData eventData)
+        {
+            var roomName = row.RoomName;
+            if (roomName == null || !RowUsable(row))
+            {
+                ForgetClick();
+                return;
+            }
+            var now = Time.unscaledTime;
+            var twice = clickRow == row && clickBinding == row.Binding && clickPointer == eventData.pointerId &&
+                        clickRoom == roomName && now - clickTime <= DoubleClickSeconds;
+            if (!twice)
+            {
+                clickRow = row;
+                clickBinding = row.Binding;
+                clickPointer = eventData.pointerId;
+                clickRoom = roomName;
+                clickTime = now;
+                return;
+            }
+            ForgetClick();                                                 // consumed: a refused or failed join needs two new clicks
+            if (CanJoinListedNow(roomName)) JoinListed(roomName);
+        }
+
+        static bool RowUsable(CoopRoomRow row) => row.isActiveAndEnabled && row.Button.isActiveAndEnabled && row.Button.IsInteractable();
+
+        /// <summary>The same conditions as the 입장 button (CoopLobby.JoinListed checks once more before sending).</summary>
+        bool CanJoinListedNow(string roomName)
+        {
+            if (!open || createOpen || InRoomView || lobby.Phase != CoopPhase.InLobby || lobby.Busy || !lobby.ListComplete) return false;
+            return lobby.Rooms.TryGet(roomName, out var r) && r.Availability == RoomAvailability.Open;
+        }
+
+        void ForgetClick() => clickRow = null;
+
         void JoinSelected()
         {
             if (selected == null) return;
+            JoinListed(selected);
+        }
+
+        /// <summary>입장 and the double click: one path to CoopLobby.JoinListed.</summary>
+        void JoinListed(string roomName)
+        {
+            ForgetClick();                                                 // any join attempt consumes an earlier row click
             ClearLocalMessage();
-            lobby.JoinListed(selected);
+            lobby.JoinListed(roomName);
         }
 
         void JoinCode()
         {
             if (!open || InRoomView) return;
+            ForgetClick();
             ClearLocalMessage();
             lobby.JoinByCode(view.codeInput.text);
         }
@@ -226,6 +297,7 @@ namespace WordRoom.Game
         void OpenCreate()
         {
             createOpen = true;
+            ForgetClick();
             ClearLocalMessage();
             view.nameInput.SetTextWithoutNotify("");
             ChooseSize(CoopRules.DefaultMaxPlayers);
@@ -323,7 +395,11 @@ namespace WordRoom.Game
                 if (shownNotice != null) localMessage = null;
             }
             var room = phase == CoopPhase.InRoom || phase == CoopPhase.LeavingRoom || lobby.HandedOver;
-            if (room) createOpen = false;                                  // entered: the create panel has done its job
+            if (room)
+            {
+                createOpen = false;                                        // entered: the create panel has done its job
+                ForgetClick();
+            }
             SetActive(view.waitingPanel, room);
             SetActive(view.lobbyPanel, !room);
             SetActive(view.createPanel, !room && createOpen);
@@ -348,6 +424,7 @@ namespace WordRoom.Game
                 selected = null;
                 SetLocalMessageSilently("선택한 방이 목록에 없어 선택을 해제했습니다.", true);
             }
+            if (!idleInLobby || list.Version != shownListVersion) ForgetClick();   // a redraw for the selection alone keeps it
             if (list.Version != shownListVersion || selected != shownSelected || refreshing != shownHidden) BindRows(list, refreshing);
 
             var inLobbyPhases = idleInLobby || phase == CoopPhase.CreatingRoom || phase == CoopPhase.JoiningRoom;
@@ -398,6 +475,7 @@ namespace WordRoom.Game
                 row.name = $"Room Row {rows.Count}";
                 var bound = row;
                 ArchiveUi.Bind(bindings, row.Button, () => Select(bound));
+                row.Clicked += RowClicked;                                 // once per row; removed in OnDestroy
                 rows.Add(row);
             }
             for (var i = 0; i < rows.Count; i++)
