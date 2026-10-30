@@ -226,7 +226,8 @@ namespace WordRoom.EditorTools
         /// Map canvas (order 150: above the HUD and hint, below the game menu and the result). A framed walnut panel
         /// 48 units inside the screen: header (지도, controls hint, 현재 위치, 닫기), the map viewport (#211A16 background
         /// catching wheel and drag, RectMask2D, MapViewportInput) holding the MapGraphic, the word pool and the player
-        /// marker (with the other coop participants' marks under it), and a legend. Buttons are outside the viewport, so pressing them never drags the map. MapView on the
+        /// marker (with the other coop participants' marks under it), the drawing parts (AddMapSketch: layer, eraser ring,
+        /// tool bar and note), and a legend. Buttons are outside the viewport, so pressing them never drags the map. MapView on the
         /// root holds the parts. The root is saved active; the scene instance is placed inactive (MapScreen opens it).
         /// </summary>
         public static GameObject BuildMapCanvas()
@@ -244,7 +245,7 @@ namespace WordRoom.EditorTools
             Horizontal(header, 16f, TextAnchor.MiddleLeft);
             var title = AddText(header, "Title", "지도", 36f, ArchiveUi.Ivory, TextAlignmentOptions.Left);
             Size(title.gameObject, 120f, 72f);
-            var help = AddText(header, "Help", "Tab 또는 Esc: 닫기    휠: 확대/축소    드래그: 이동", 20f, ArchiveUi.IvoryDim, TextAlignmentOptions.Left);
+            var help = AddText(header, "Help", MapHelpText, 20f, ArchiveUi.IvoryDim, TextAlignmentOptions.Left);
             Size(help.gameObject, -1f, 72f, 1f);
             var recenter = AddButton(header, "RecenterButton", "현재 위치", 180f, 56f, 22f);
             var close = AddButton(header, "CloseButton", "닫기", 140f, 56f, 22f);
@@ -322,6 +323,7 @@ namespace WordRoom.EditorTools
             pool.arraySize = words.Length;
             for (var i = 0; i < words.Length; i++) pool.GetArrayElementAtIndex(i).objectReferenceValue = words[i];
             SetRemoteMapMarkers(so, remotes);
+            Set(so, "sketch", AddMapSketch(root, panel, viewport, remotes.Length > 0 ? remotes[0].rectTransform.GetSiblingIndex() : markerRect.GetSiblingIndex(), EnsureMapCursors(null, null)));   // drawing under the marks
             so.ApplyModifiedPropertiesWithoutUndo();
             return root;
         }

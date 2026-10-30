@@ -83,6 +83,7 @@ namespace WordRoom.Network
         double startedAt;
         readonly Queue<PlayMessage> play = new Queue<PlayMessage>();
         readonly Queue<PlayMessage> poses = new Queue<PlayMessage>();   // display poses, apart from the ordered logical queue
+        readonly Queue<PlayMessage> sketches = new Queue<PlayMessage>();   // map drawing messages, in arrival order, apart from exploration
         const int MaxPoses = 64;                                        // a few frames of every participant; older ones are dropped first
 
         /// <summary>Raised on the main thread after every change of stage, entry or notice.</summary>
@@ -213,6 +214,7 @@ namespace WordRoom.Network
             go = null;
             play.Clear();
             poses.Clear();
+            sketches.Clear();
             Raise();
         }
 
@@ -386,6 +388,21 @@ namespace WordRoom.Network
             return false;
         }
 
+        /// <summary>
+        /// The next map drawing message in arrival order (the host's own included). Sent and checked like the exploration
+        /// messages (SendToHost / SendToAll / SendTo, real sender) but kept apart, so drawing never delays exploration.
+        /// </summary>
+        public bool TryTakeSketch(out PlayMessage message)
+        {
+            if (sketches.Count > 0)
+            {
+                message = sketches.Dequeue();
+                return true;
+            }
+            message = default;
+            return false;
+        }
+
         /// <summary>A request (or a full-state request) of this device to the host; the host's own goes straight into its queue. False when it could not be sent.</summary>
         public bool SendToHost(byte code, object[] content)
         {
@@ -453,14 +470,14 @@ namespace WordRoom.Network
         void HandleToHost(byte code, int sender, object content)
         {
             if (!IsHost || !InPlay || Array.IndexOf(entry.Actors, sender) < 0) return;
-            play.Enqueue(new PlayMessage(code, sender, content));
+            (CoopProtocol.IsSketchCode(code) ? sketches : play).Enqueue(new PlayMessage(code, sender, content));
         }
 
         /// <summary>Replies, changes and full states only from the real host of this start.</summary>
         void HandleFromHost(byte code, int sender, object content)
         {
             if (!FromHost(sender) || !InPlay) return;
-            play.Enqueue(new PlayMessage(code, sender, content));
+            (CoopProtocol.IsSketchCode(code) ? sketches : play).Enqueue(new PlayMessage(code, sender, content));
         }
 
         /// <summary>
@@ -530,11 +547,17 @@ namespace WordRoom.Network
                 case CoopProtocol.ResyncCode:
                 case CoopProtocol.QueryCode:
                 case CoopProtocol.AckCode:
-                case CoopProtocol.StopAckCode: HandleToHost(e.Code, e.Sender, e.CustomData); break;
+                case CoopProtocol.StopAckCode:
+                case CoopProtocol.SketchRequestCode:
+                case CoopProtocol.SketchResyncCode:
+                case CoopProtocol.SketchAckCode: HandleToHost(e.Code, e.Sender, e.CustomData); break;
                 case CoopProtocol.ReplyCode:
                 case CoopProtocol.ChangeCode:
                 case CoopProtocol.CopyCode:
-                case CoopProtocol.StopCode: HandleFromHost(e.Code, e.Sender, e.CustomData); break;
+                case CoopProtocol.StopCode:
+                case CoopProtocol.SketchChangeCode:
+                case CoopProtocol.SketchReplyCode:
+                case CoopProtocol.SketchCopyCode: HandleFromHost(e.Code, e.Sender, e.CustomData); break;
                 case CoopProtocol.PoseCode: HandlePose(e.Sender, e.CustomData); break;
             }
         }
@@ -651,6 +674,7 @@ namespace WordRoom.Network
             hostAttempt = null;
             play.Clear();                                          // nothing of the stopped game is used any more
             poses.Clear();
+            sketches.Clear();
             entryPending = entryLost = false;
             Debug.LogWarning($"[협동] 게임 시작 중단: {AbortReason}");
             ReopenRoomIfMaster();

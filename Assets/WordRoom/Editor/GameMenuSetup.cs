@@ -178,7 +178,7 @@ namespace WordRoom.EditorTools
         /// Only the map of the existing Gameplay scene: the MapCanvas prefab (built only when missing, with its word pool),
         /// one placed instance (inactive when new), the MapScreen references, and the game menu's and result screen's
         /// links to it when those are empty. An existing prefab only gets the coop participants' marks it lacks
-        /// (EnsureMapRemoteMarkers). Nothing else is checked or changed (no other UI, no value move, no
+        /// (EnsureMapRemoteMarkers) and the drawing parts and cursor images it lacks (EnsureMapSketch). Nothing else is checked or changed (no other UI, no value move, no
         /// materials); Gameplay is never made or copied here.
         /// </summary>
         [MenuItem("WordRoom/지도 화면 구성")]
@@ -194,14 +194,19 @@ namespace WordRoom.EditorTools
                 var temporary = false;
                 var prefab = LoadOrBuild(ArchiveUiBuilder.MapPrefabPath, ArchiveUiBuilder.BuildMapCanvas, typeof(MapView), notes, saved, ref temporary);
                 EnsureMapRemoteMarkers(notes, saved);
+                EnsureMapSketch(notes, saved);
                 var start = notes.Count;
                 var scene = EditorSceneManager.OpenScene(GameplayPath, OpenSceneMode.Single);
                 var games = Object.FindObjectsByType<RoomGenerationDebug>(FindObjectsInactive.Include, FindObjectsSortMode.None);
                 if (games.Length != 1) throw new InvalidOperationException($"Gameplay 씬의 RoomGenerationDebug가 {games.Length}개입니다(하나여야 함)");
                 SetupMap(games[0], games[0].GetComponent<PauseMenu>(), prefab, scene, notes);
                 foreach (var v in Object.FindObjectsByType<MapView>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+                {
                     if (v.gameObject.scene == scene && !HasRemoteMarkers(v))           // a scene override emptied them, or not the prefab's instance
                         notes.Add($"{Warning}Gameplay의 '{v.name}' MapView에 원격 마커(remoteMarkers)가 연결되지 않아 협동 지도에 다른 참가자가 보이지 않습니다(씬은 바꾸지 않음). 인스펙터에서 연결하거나 프리팹 값으로 되돌리세요");
+                    if (v.gameObject.scene == scene && v.Sketch == null)
+                        notes.Add($"{Warning}Gameplay의 '{v.name}' MapView에 그림 도구(sketch)가 연결되지 않아 지도 그림이 꺼집니다(씬은 바꾸지 않음). 인스펙터에서 연결하거나 프리팹 값으로 되돌리세요");
+                }
                 SaveIfChanged(scene, GameplayPath, start, notes, saved);
             });
         }
@@ -251,6 +256,83 @@ namespace WordRoom.EditorTools
                 if (!ok) throw new InvalidOperationException($"{path}에 원격 마커를 저장하지 못했습니다");
                 if (!saved.Contains(path)) saved.Add(path);
                 notes.Add($"{path}: {viewport.name}/{ArchiveUiBuilder.RemoteMapMarkerPrefix}0~{marks.Length - 1}(다른 참가자 마커)와 MapView.remoteMarkers 추가 — 다른 항목은 그대로");
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(contents);
+            }
+        }
+
+        /// <summary>
+        /// Adds only the map drawing to the saved MapCanvas prefab (ArchiveUiBuilder.AddMapSketch: layer under the marks,
+        /// eraser ring, tool bar and note, MapSketchView, MapView.sketch) when its MapView has none connected and none of
+        /// those objects exists; makes the cursor images when missing and fills only empty cursor references; replaces the
+        /// help line only while it still reads the old default. Colors, fonts, layout, marks and every other part stay as
+        /// they are. Never rebuilds the prefab; running again adds nothing twice.
+        /// </summary>
+        static void EnsureMapSketch(List<string> notes, List<string> saved)
+        {
+            var path = ArchiveUiBuilder.MapPrefabPath;
+            var cursors = ArchiveUiBuilder.EnsureMapCursors(notes, saved);
+            var contents = PrefabUtility.LoadPrefabContents(path);
+            try
+            {
+                var view = contents.GetComponent<MapView>();
+                if (view == null) return;
+                var so = new SerializedObject(view);
+                var changed = false;
+                var sketch = so.FindProperty("sketch").objectReferenceValue as MapSketchView;
+                if (sketch == null)
+                {
+                    var viewport = so.FindProperty("viewport").objectReferenceValue as RectTransform;
+                    var panel = viewport != null ? viewport.parent as RectTransform : null;
+                    var player = so.FindProperty("playerMarker").objectReferenceValue as MapMarker;
+                    if (panel == null || player == null || player.rectTransform.parent != viewport)
+                    {
+                        notes.Add($"{Warning}{path}의 MapView에 지도 영역·플레이어 마커가 없어 그림 도구를 추가하지 않았습니다(지도의 다른 기능은 그대로)");
+                        return;
+                    }
+                    if (contents.GetComponent<MapSketchView>() != null || viewport.Find(ArchiveUiBuilder.SketchLayerName) != null ||
+                        viewport.Find(ArchiveUiBuilder.SketchRingName) != null || panel.Find(ArchiveUiBuilder.SketchToolsName) != null || panel.Find(ArchiveUiBuilder.SketchNoteName) != null)
+                    {
+                        notes.Add($"{Warning}{path}에 그림 도구 일부가 있지만 MapView.sketch에 연결되지 않았습니다(바꾸지 않음, 중복 생성 안 함). 직접 연결하거나 해당 오브젝트를 정리한 뒤 다시 실행하세요");
+                        return;
+                    }
+                    var first = player.rectTransform.GetSiblingIndex();           // under the player's own and the other participants' marks
+                    var remotes = so.FindProperty("remoteMarkers");
+                    for (var i = 0; i < remotes.arraySize; i++)
+                        if (remotes.GetArrayElementAtIndex(i).objectReferenceValue is MapMarker m && m.rectTransform.parent == viewport)
+                            first = Mathf.Min(first, m.rectTransform.GetSiblingIndex());
+                    sketch = ArchiveUiBuilder.AddMapSketch(contents, panel, viewport, first, cursors);
+                    so.FindProperty("sketch").objectReferenceValue = sketch;
+                    so.ApplyModifiedPropertiesWithoutUndo();
+                    changed = true;
+                    notes.Add($"{path}: 그림 레이어({viewport.name}/{ArchiveUiBuilder.SketchLayerName}, {ArchiveUiBuilder.SketchRingName}), 도구({ArchiveUiBuilder.SketchToolsName}, {ArchiveUiBuilder.SketchNoteName}), MapSketchView와 MapView.sketch 추가 — 다른 항목은 그대로");
+                }
+                else
+                {
+                    var sso = new SerializedObject(sketch);
+                    if (ArchiveUiBuilder.SetCursors(sso, cursors, true))
+                    {
+                        sso.ApplyModifiedPropertiesWithoutUndo();
+                        changed = true;
+                        notes.Add($"{path}: MapSketchView의 빈 커서 이미지 연결");
+                    }
+                }
+                var help = view.transform.Find("Map/Header/Help");
+                var text = help != null ? help.GetComponent<TextMeshProUGUI>() : null;
+                if (text != null && text.text == ArchiveUiBuilder.OldMapHelpText)
+                {
+                    text.text = ArchiveUiBuilder.MapHelpText;
+                    changed = true;
+                    notes.Add($"{path}: 지도 도움말을 우클릭 이동·좌클릭 도구 안내로 변경");
+                }
+                else if (text == null || text.text != ArchiveUiBuilder.MapHelpText)
+                    notes.Add($"{Warning}{path}의 지도 도움말(Map/Header/Help)이 기본 문구와 달라 바꾸지 않았습니다. 조작이 우클릭 드래그 이동·좌클릭 연필/지우개로 바뀌었으니 직접 확인하세요");
+                if (!changed) return;
+                PrefabUtility.SaveAsPrefabAsset(contents, path, out var ok);
+                if (!ok) throw new InvalidOperationException($"{path}에 그림 도구를 저장하지 못했습니다");
+                if (!saved.Contains(path)) saved.Add(path);
             }
             finally
             {

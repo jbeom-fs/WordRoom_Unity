@@ -11,8 +11,10 @@ namespace WordRoom.Game
     /// <summary>
     /// The drawing part of the map screen (on the Map Canvas prefab, with its parts connected in the prefab): north-up
     /// view of an ExploredMap with a center (map units) and a cell size (canvas units per room), wheel zoom that keeps
-    /// the map point under the pointer, left drag to pan, and the player's mark at the player's real position and
-    /// heading.
+    /// the map point under the pointer, right drag to pan, and the player's mark at the player's real position and
+    /// heading. Every conversion between screen, viewport and map goes through TryScreenToViewport / ViewportToMap /
+    /// MapToViewport (center, cell, the viewport rect, the canvas scale and the event camera), shared with the drawing
+    /// (MapSketchView, optional: the left button is its tool).
     /// Resources are fixed and reused: one MapGraphic mesh (rebuilt only when the data version or the view changed),
     /// one MapMarker moved by its RectTransform, and a pool of word texts made in the Editor. Only rooms inside the
     /// viewport get words; a room keeps its text while it stays visible, so a string is written only for a room that
@@ -44,6 +46,8 @@ namespace WordRoom.Game
         [SerializeField] Graphic playerSwatch;
         [Tooltip("협동에서 다른 참가자를 표시할 삼각형(선택, 편집 단계에서 미리 만든 슬롯). 비어 있으면 다른 참가자를 지도에 표시하지 않습니다.")]
         [SerializeField] MapMarker[] remoteMarkers = new MapMarker[0];
+        [Tooltip("지도 그림 도구(선택). 비어 있거나 부품이 빠지면 그림만 꺼지고 지도의 다른 기능은 그대로입니다.")]
+        [SerializeField] MapSketchView sketch;
 
         [Header("배율 (칸 크기 = 방 하나의 Canvas 단위 크기)")]
         [SerializeField] float defaultCell = 120f;
@@ -73,6 +77,57 @@ namespace WordRoom.Game
 
         public Button CloseButton => closeButton;
         public Button RecenterButton => recenterButton;
+        public MapSketchView Sketch => sketch;
+        public MapViewportInput Input => input;
+
+        /// <summary>Map point at the viewport's center.</summary>
+        public Vector2 Center => center;
+
+        /// <summary>Canvas units per map unit (one room spacing) at the current zoom.</summary>
+        public float Cell => cell;
+
+        /// <summary>The player mark's own single-play color (the prefab's mint).</summary>
+        public Color SoloColor => soloColor;
+
+        /// <summary>The camera pointer events of this canvas use (null for Screen Space Overlay).</summary>
+        public Camera EventCamera
+        {
+            get
+            {
+                var root = canvas.rootCanvas;
+                return root.renderMode == RenderMode.ScreenSpaceOverlay ? null : root.worldCamera;
+            }
+        }
+
+        float CanvasScale
+        {
+            get
+            {
+                var s = canvas.rootCanvas.scaleFactor;
+                return s > 0f ? s : 1f;
+            }
+        }
+
+        /// <summary>A screen point in viewport units from the viewport's center (the space marks and words are placed in).</summary>
+        public bool TryScreenToViewport(Vector2 screen, Camera eventCamera, out Vector2 local)
+        {
+            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(viewport, screen, eventCamera, out local)) return false;
+            local -= viewport.rect.center;
+            return true;
+        }
+
+        public Vector2 ViewportToMap(Vector2 local) => center + local / cell;
+
+        public Vector2 MapToViewport(Vector2 map) => (map - center) * cell;
+
+        /// <summary>A screen point as a map point (continuous map units, not rounded to rooms).</summary>
+        public bool TryScreenToMap(Vector2 screen, Camera eventCamera, out Vector2 map)
+        {
+            map = default;
+            if (cell <= 0f || !TryScreenToViewport(screen, eventCamera, out var local)) return false;
+            map = ViewportToMap(local);
+            return true;
+        }
 
         Vector2 center;
         float cell;
@@ -124,7 +179,7 @@ namespace WordRoom.Game
             if (initialized) return;
             initialized = true;
             input.Zoomed += OnZoom;
-            input.Dragged += OnDrag;
+            input.Panned += OnPan;
             var n = words.Length;
             slotPos = new GridPos[n];
             slotUsed = new bool[n];
@@ -164,7 +219,7 @@ namespace WordRoom.Game
         {
             if (!initialized || input == null) return;
             input.Zoomed -= OnZoom;
-            input.Dragged -= OnDrag;
+            input.Panned -= OnPan;
         }
 
         /// <summary>New session: the next open centers on the player again at the default size; words of the old map go.</summary>
@@ -263,9 +318,8 @@ namespace WordRoom.Game
         // ---- pointer ------------------------------------------------------------------------------------------
         void OnZoom(Vector2 screen, int direction, Camera eventCamera)
         {
-            if (cell <= 0f || !RectTransformUtility.ScreenPointToLocalPointInRectangle(viewport, screen, eventCamera, out var local)) return;
-            local -= viewport.rect.center;
-            var under = center + local / cell;                                 // the map point under the pointer stays there
+            if (cell <= 0f || !TryScreenToViewport(screen, eventCamera, out var local)) return;
+            var under = ViewportToMap(local);                                  // the map point under the pointer stays there
             var next = Mathf.Clamp(direction > 0 ? cell * zoomStep : cell / zoomStep, effectiveMinCell, effectiveMaxCell);
             if (Mathf.Approximately(next, cell)) return;
             cell = next;
@@ -273,12 +327,10 @@ namespace WordRoom.Game
             dirty = true;
         }
 
-        void OnDrag(Vector2 screenDelta, Camera eventCamera)
+        void OnPan(Vector2 screenDelta, Camera eventCamera)
         {
             if (cell <= 0f) return;
-            var scale = canvas.rootCanvas.scaleFactor;
-            if (scale <= 0f) scale = 1f;
-            center -= screenDelta / scale / cell;
+            center -= screenDelta / CanvasScale / cell;
             dirty = true;
         }
 
@@ -329,7 +381,7 @@ namespace WordRoom.Game
             var p = slotPos[i];
             var t = words[i];
             var width = Mathf.Max(1f, graphic.TileHalf(cell) * 2f * 0.95f);
-            t.rectTransform.anchoredPosition = new Vector2((p.X - center.x) * cell, (p.Y - center.y - wordBand) * cell);
+            t.rectTransform.anchoredPosition = MapToViewport(new Vector2(p.X, p.Y - wordBand));
             if (Mathf.Approximately(slotCell[i], cell)) return;               // size changes only with the zoom
             slotCell[i] = cell;
             var length = Mathf.Max(1, t.text.Length);
@@ -370,7 +422,7 @@ namespace WordRoom.Game
                 markerSize = size;
                 r.sizeDelta = new Vector2(size, size);
             }
-            r.anchoredPosition = (pose - center) * cell;                       // the real position, never shifted for the words
+            r.anchoredPosition = MapToViewport(pose);                          // the real position, never shifted for the words
             r.localRotation = Quaternion.Euler(0f, 0f, -heading);              // clockwise from 상, the map itself never turns
             if (!playerMarker.enabled) playerMarker.enabled = true;
         }
@@ -397,7 +449,7 @@ namespace WordRoom.Game
                 remoteSize[slot] = size;
                 r.sizeDelta = new Vector2(size, size);
             }
-            r.anchoredPosition = (pose - center) * cell;
+            r.anchoredPosition = MapToViewport(pose);
             r.localRotation = Quaternion.Euler(0f, 0f, -heading);
             if (m.color != color) m.color = color;
             if (!m.enabled) m.enabled = true;

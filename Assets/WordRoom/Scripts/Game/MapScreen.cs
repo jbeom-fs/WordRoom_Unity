@@ -12,7 +12,8 @@ namespace WordRoom.Game
     /// The single-player map of the Gameplay scene: every room generated in this session (RoomGenerationDebug's
     /// ExploredMap — also rooms the 3D view has let go), visited or not, the current room, the target room once it
     /// exists, the connections, and the player's position and heading. Tab opens and closes it (once per press), the 닫기 button and
-    /// Escape close it, the wheel zooms, a left drag on the map pans, 현재 위치 centers on the player.
+    /// Escape close it, the wheel zooms at the pointer, a right drag on the map pans, the left button uses the drawing
+    /// tool (연필·지우개, MapSketchView), 현재 위치 centers on the player.
     /// Input rules (explicit, not by Update order): Escape belongs to the game menu, which closes an open map first
     /// and then stops, so one press never closes the map and opens the menu; only without a usable game menu does
     /// this component read Escape itself. The map does not open while the game menu (or its settings) is open, before
@@ -22,6 +23,10 @@ namespace WordRoom.Game
     /// the map; this is not the menu block, so it never lifts a menu's or the result's block, and the generation's
     /// walking lock stays as it is. Closing pauses input for one frame, then mouse look resumes. A new experiment closes it and
     /// starts the view over. The map's buttons have no keyboard navigation, so WASD only walks.
+    /// Drawing: this screen owns the session's MapSketchBoard (Sketch). In single play it is attached to the explored
+    /// map's session here (this device decides); in coop CoopGameplayFlow attaches it to the host. A new game drops it;
+    /// closing and opening the map keeps it. Without the drawing parts (MapView.Sketch) the map works as before, drawing
+    /// off (reported once).
     /// In coop the player mark takes this participant's robot color, and the other participants are drawn in the view's
     /// prepared remote marks from RemotePlayers' latest received poses (only in rooms of the explored map; display only).
     /// The display is the scene's Map Canvas (prefab instance, inactive while closed); nothing is made at runtime.
@@ -55,6 +60,12 @@ namespace WordRoom.Game
         string boundSession;                 // explored-map session the slots were bound at
         bool boundCoop;
         bool slotsShortReported;
+        readonly MapSketchBoard sketch = new MapSketchBoard();
+        MapSketchView sketchView;            // null = drawing off (missing or incomplete parts)
+        Func<string, Color32> sketchColor;
+
+        /// <summary>This device's drawing of the current session (attached by this screen in single play, by CoopGameplayFlow in coop).</summary>
+        public MapSketchBoard Sketch => sketch;
 
         public bool IsOpen => open;
 
@@ -71,6 +82,7 @@ namespace WordRoom.Game
                 return;
             }
             view.Initialize();
+            InitializeSketch();
             slotIds = new string[view.RemoteSlots];
             ArchiveUi.Bind(bindings, view.CloseButton, Close);
             ArchiveUi.Bind(bindings, view.RecenterButton, Recenter);
@@ -135,6 +147,35 @@ namespace WordRoom.Game
             view.SetPlayerColor(TryCoopColor(game.ExploredMap.LocalPlayer, out var own) ? own : (Color?)null);
             view.Tick(game.ExploredMap, hasPose, pose, heading);
             DrawRemotes();
+            if (sketchView != null)
+            {
+                AttachLocalSketch();
+                var rp = game.RemotePlayers;
+                sketchView.Tick(sketch, sketchColor, game.IsCoop ? (rp != null ? rp.Version : -1) : int.MaxValue);   // colors change only with the participants or the mode
+            }
+        }
+
+        /// <summary>The drawing parts, checked once: incomplete parts turn drawing off (its tools hidden), never the map.</summary>
+        void InitializeSketch()
+        {
+            var s = view.Sketch;
+            string missing = s == null ? "MapView.sketch(비어 있음)" : s.MissingParts();
+            if (missing != null)
+            {
+                if (s != null) s.Hide();
+                Debug.LogWarning($"[지도] 지도 그림 부품이 없거나 빠져 그림 기능을 끕니다(지도의 다른 기능은 그대로): {missing}. WordRoom/지도 화면 구성 메뉴로 보완하세요.", this);
+                return;
+            }
+            sketchView = s;
+            sketchView.Initialize(view, view.Input);
+            sketchColor = author => TryCoopColor(author, out var c) ? c : view.SoloColor;   // the participants' robot and mark colors; the mark's own color in single play
+        }
+
+        /// <summary>Single play: this device decides the drawing of the explored map's session (a new session starts an empty one).</summary>
+        void AttachLocalSketch()
+        {
+            var map = game.ExploredMap;
+            if (!game.IsCoop && map.HasData && map.Session != null) sketch.AttachLocal(map.Session, map.LocalPlayer);
         }
 
         /// <summary>A coop participant's color (the same as its robot's accent); false in single play or without RemotePlayers.</summary>
@@ -262,6 +303,7 @@ namespace WordRoom.Game
         {
             if (!open) return;
             open = false;
+            if (sketchView != null) sketchView.Close();                    // a press in progress is dropped; the arrow again
             if (display != null) display.SetActive(false);
             if (EventSystem.current != null) EventSystem.current.SetSelectedGameObject(null);
             SetMapPlayer(null);                                            // mouse look again after a one-frame input pause
@@ -270,6 +312,7 @@ namespace WordRoom.Game
         void Recenter()
         {
             if (!open) return;
+            if (sketchView != null) sketchView.Interrupt();                 // a line in progress ends where it was before the view moves
             if (TryPlayerPose(out var pose, out _)) view.CenterOn(pose);
             else view.CenterOn(new Vector2(game.ExploredMap.Current.X, game.ExploredMap.Current.Y));
             if (EventSystem.current != null) EventSystem.current.SetSelectedGameObject(null);   // Space/Enter never press it again while walking
@@ -278,6 +321,7 @@ namespace WordRoom.Game
         void OnExperimentStarted()
         {
             Close();
+            sketch.Detach();                                                   // a new game: the old drawing goes (coop attaches the new one when play starts)
             viewSession = game.ExploredMap.Session;
             view.BeginSession();
             boundVersion = int.MinValue;                                       // slots and colors are bound again on the next open

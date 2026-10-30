@@ -76,6 +76,31 @@ namespace WordRoom.Game
         bool queryAfterCopy;                // a whole state was applied: ask a waiting request's outcome now
         bool stoppedHere;                   // this device stopped for good (shared stop, or an outcome or state it could not confirm)
 
+        // map drawing: apart from exploration (own revisions and queue; never a Request, an Ack or the stop of a device).
+        // Host: the session's drawing as decided; every participant's edit (author from the real sender) checked there.
+        // Every device: its shown drawing is MapScreen's board (null without a map screen; the host still decides then).
+        MapSketch hostSketch;
+        readonly MapSketchBoard sketchBoard;
+        readonly MapSketchBoard.Sender sketchSender;
+        // host: participants that must confirm a whole drawing (SketchAck) — sent with a whole-state recovery, or after a
+        // change that could not reach them; a send that went out is not a confirmation
+        readonly Dictionary<int, SketchOwed> sketchOwed = new Dictionary<int, SketchOwed>();
+        // this device: the drawing recovery (a gap, a change it could not read, or an edit left unanswered)
+        bool sketchResyncWanted;
+        long sketchNeed;                    // the drawing revision a whole drawing must bring this device to, to end it
+        int sketchResyncTries;
+        double nextSketchResyncAt;
+        long sketchToken;                   // the latest whole-drawing request id of this device (grows over the game)
+        readonly Dictionary<long, long> sketchTokenCovers = new Dictionary<long, long>();   // this recovery's request ids → this device's last edit id when sent
+
+        /// <summary>Host: one participant's whole drawing to be confirmed — at least Revision, sent up to RecoveryAttempts times.</summary>
+        sealed class SketchOwed
+        {
+            public long Revision;
+            public int Sends;
+            public double NextAt;
+        }
+
         /// <summary>One host job: a participant's request, or (Request null) the whole state for that participant.</summary>
         readonly struct HostJob
         {
@@ -143,6 +168,10 @@ namespace WordRoom.Game
             this.session = session;
             this.entry = entry;
             game.SetCoopHint("단어 데이터를 불러오는 중…");
+            var map = game.GetComponent<MapScreen>();
+            if (map == null) map = Object.FindAnyObjectByType<MapScreen>();
+            sketchBoard = map != null ? map.Sketch : null;
+            sketchSender = SendSketch;
         }
 
         public void Tick()
@@ -180,6 +209,7 @@ namespace WordRoom.Game
             }
             else if (!stoppedHere) AckApplied(now);
             if (!stoppedHere) CheckOwnRecovery(now);
+            if (started) TickSketch(now);                                   // never delays or blocks a step above
         }
 
         // ---- exploration -------------------------------------------------------------------------------------------
@@ -757,6 +787,7 @@ namespace WordRoom.Game
                 hostHead = System.Math.Max(hostHead, copy.Revision);
                 if (!session.SendToAll(CoopProtocol.CopyCode, CoopProtocol.EncodeCopy(entry.Attempt, copy.SessionId, copy.Revision, world, copy.Result, null)))
                     Debug.LogWarning("[협동] 오류 뒤 전체 상태를 다른 참가자에게 보내지 못했습니다(적용 확인이 늦는 참가자에게 다시 보냅니다)");
+                OweSketchAll(Time.realtimeSinceStartupAsDouble);              // and the drawing with it, until each participant confirms it
                 SendReply(job.Sender, m.SessionId, m.RequestId, record);
             });
         }
@@ -802,6 +833,7 @@ namespace WordRoom.Game
                 p.Target = copy.Revision;                                   // sent (or tried): judged by its Ack from now on
                 p.SentAt = now;
                 if (!session.SendTo(actor, CoopProtocol.CopyCode, content)) Debug.LogWarning($"[협동] 참가자 {actor}에게 전체 상태를 보내지 못했습니다(적용 확인으로 다시 판단합니다)");
+                OweSketch(actor, now);                                      // the drawing too (its own message), until that participant confirms it
             });
         }
 
@@ -1021,7 +1053,290 @@ namespace WordRoom.Game
             ended = true;
             game.SetCoopHint(null);
             game.HaltCoop(reason);
+            hostSketch = null;
+            sketchOwed.Clear();
+            EndSketchRecovery();
+            if (sketchBoard != null) sketchBoard.Detach();                  // the coop game's drawing is gone with it
             if (game.RemotePlayers != null) game.RemotePlayers.Clear();   // the coop game is gone: nobody else is shown any more
+        }
+
+        // ---- map drawing (its own revisions and queue; exploration never waits for it) ---------------------------------
+        string LocalPlayerId => CoopRules.PlayerIdOf(entry.LocalActor);
+
+        /// <summary>
+        /// Once play started: this device's board is attached to the host (its edits go there), the host keeps the session's
+        /// drawing, every drawing message that arrived is taken in arrival order, and the recovery runs on its schedule —
+        /// host: a whole drawing owed to a participant (with a whole-state recovery, or after a change that could not reach
+        /// it) is sent until that participant confirms it (SketchAck), within limits; others: the whole drawing asked for
+        /// after a gap, a change it could not read or an edit left unanswered (limited; see CheckSketch).
+        /// </summary>
+        void TickSketch(double now)
+        {
+            var sessionId = game.CoopSessionId;
+            if (sessionId == null) return;
+            if (sketchBoard != null) sketchBoard.AttachRemote(sessionId, LocalPlayerId, sketchSender);
+            if (session.IsHost && hostSketch == null) hostSketch = new MapSketch(sessionId);
+            while (session.TryTakeSketch(out var m))
+            {
+                switch (m.Code)
+                {
+                    case CoopProtocol.SketchRequestCode: HostSketchRequest(m, now); break;   // only the host receives these three (CoopSession)
+                    case CoopProtocol.SketchResyncCode: HostSketchResync(m); break;
+                    case CoopProtocol.SketchAckCode: HostSketchAck(m); break;
+                    case CoopProtocol.SketchChangeCode: TakeSketchChange(m.Content); break;
+                    case CoopProtocol.SketchReplyCode: TakeSketchReply(m.Content); break;
+                    case CoopProtocol.SketchCopyCode: TakeSketchCopy(m.Content); break;
+                }
+            }
+            if (session.IsHost) WatchSketchOwed(now);
+            else CheckSketch(now);
+        }
+
+        /// <summary>This device's edit to the host (the host's own goes into its queue). False when it could not be sent.</summary>
+        bool SendSketch(SketchKind kind, long requestId, float size, float[] points) =>
+            session.SendToHost(CoopProtocol.SketchRequestCode, CoopProtocol.Encode(new CoopProtocol.SketchRequest
+            {
+                Attempt = entry.Attempt, SessionId = game.CoopSessionId, RequestId = requestId, Kind = kind, Size = size, Points = points,
+            }));
+
+        /// <summary>
+        /// Host: one participant's edit, its author the real sender's PlayerId (never a body value), only from a participant
+        /// still in the room, for this session, while exploring goes on. The drawing decides (MapSketch.Submit: newer request
+        /// than the author's last, valid points, own lines only, limits; whole or nothing): a change goes to everyone (this
+        /// host's display too) and is its own answer; no change or a refusal is answered to the sender; a repeated or late
+        /// request is ignored (it was answered before, or a later 모두 지우기 replaced it).
+        /// </summary>
+        void HostSketchRequest(CoopSession.PlayMessage m, double now)
+        {
+            if (!CoopProtocol.TryDecode(m.Content, out CoopProtocol.SketchRequest r, out var error))
+            {
+                Debug.LogWarning($"[협동] 참가자 {m.Sender}의 그림 요청을 무시했습니다: {error}");
+                return;
+            }
+            if (r.Attempt != entry.Attempt || hostSketch == null || !session.IsInRoom(m.Sender)) return;
+            string refusal = null;
+            if (r.SessionId != hostSketch.SessionId) refusal = "다른 게임의 그림 요청입니다";
+            else if (hostStopReason != null) refusal = "탐색이 멈춰 그림을 바꿀 수 없습니다";
+            else if (Ended(m.Sender, out _)) refusal = "이 기기의 상태 복구가 끝나 그림을 바꿀 수 없습니다";
+            if (refusal != null)
+            {
+                SendSketchReply(m.Sender, r, true, refusal);
+                return;
+            }
+            switch (hostSketch.Submit(CoopRules.PlayerIdOf(m.Sender), r.RequestId, r.Kind, r.Size, r.Points, out var change, out refusal))
+            {
+                case SketchOutcome.Changed:
+                    if (!session.SendToAll(CoopProtocol.SketchChangeCode, CoopProtocol.EncodeSketchChange(entry.Attempt, change)))
+                    {
+                        Debug.LogWarning($"[협동] 그림 변경 {change.Revision}을 다른 참가자에게 보내지 못했습니다(확인될 때까지 그림 전체를 보냅니다)");
+                        OweSketchAll(now);
+                    }
+                    break;
+                case SketchOutcome.Unchanged:
+                    SendSketchReply(m.Sender, r, false, null);
+                    break;
+                case SketchOutcome.Refused:
+                    SendSketchReply(m.Sender, r, true, refusal);
+                    break;
+            }
+        }
+
+        void SendSketchReply(int actor, CoopProtocol.SketchRequest r, bool refused, string reason)
+        {
+            var content = CoopProtocol.Encode(new CoopProtocol.SketchReply { Attempt = entry.Attempt, SessionId = r.SessionId, RequestId = r.RequestId, Refused = refused, Reason = reason });
+            if (!session.SendTo(actor, CoopProtocol.SketchReplyCode, content))
+                Debug.LogWarning($"[협동] 참가자 {actor}에게 그림 요청 {r.RequestId}의 결과를 보내지 못했습니다(그 기기가 그림 전체를 요청하면 맞춰집니다)");
+        }
+
+        void HostSketchResync(CoopSession.PlayMessage m)
+        {
+            if (!CoopProtocol.TryDecode(m.Content, out CoopProtocol.SketchResync r, out var error))
+            {
+                Debug.LogWarning($"[협동] 참가자 {m.Sender}의 그림 전체 요청을 무시했습니다: {error}");
+                return;
+            }
+            if (r.Attempt != entry.Attempt || hostSketch == null || r.SessionId != hostSketch.SessionId) return;
+            SendSketchCopy(m.Sender, r.Token);                              // its answer (the token goes back); an owed drawing stays owed until confirmed
+        }
+
+        /// <summary>Host: a participant shows drawing revision Revision after a whole drawing — what was owed to it up to there is confirmed.</summary>
+        void HostSketchAck(CoopSession.PlayMessage m)
+        {
+            if (!CoopProtocol.TryDecode(m.Content, out CoopProtocol.SketchAck a, out var error))
+            {
+                Debug.LogWarning($"[협동] 참가자 {m.Sender}의 그림 확인을 무시했습니다: {error}");
+                return;
+            }
+            if (a.Attempt != entry.Attempt || hostSketch == null || a.SessionId != hostSketch.SessionId) return;
+            if (sketchOwed.TryGetValue(m.Sender, out var o) && a.Revision >= o.Revision) sketchOwed.Remove(m.Sender);
+        }
+
+        /// <summary>Host: the whole drawing to one participant (`token` = the request it answers, 0 = on the host's own). False when not sent (too large, or the send failed).</summary>
+        bool SendSketchCopy(int actor, long token)
+        {
+            if (hostSketch == null) return false;
+            if (!CoopProtocol.FitsSketch(hostSketch, out var why))
+            {
+                Debug.LogError($"[협동] 그림 전체가 전송 한도를 넘어 보내지 않았습니다: {why}");
+                return false;
+            }
+            if (session.SendTo(actor, CoopProtocol.SketchCopyCode, CoopProtocol.EncodeSketchCopy(entry.Attempt, hostSketch, token))) return true;
+            Debug.LogWarning($"[협동] 참가자 {actor}에게 그림 전체를 보내지 못했습니다");
+            return false;
+        }
+
+        /// <summary>Host: `actor` (another participant) needs the whole drawing of at least this revision; sent from the next tick on until confirmed.</summary>
+        void OweSketch(int actor, double now)
+        {
+            if (hostSketch == null || actor == entry.LocalActor) return;    // this host's own display gets every change through its own queue
+            if (!sketchOwed.TryGetValue(actor, out var o)) sketchOwed[actor] = o = new SketchOwed();
+            o.Revision = hostSketch.Revision;
+            o.Sends = 0;
+            o.NextAt = now;
+        }
+
+        void OweSketchAll(double now)
+        {
+            foreach (var actor in entry.Actors)
+                if (session.IsInRoom(actor)) OweSketch(actor, now);
+        }
+
+        /// <summary>
+        /// Host: every owed whole drawing is sent (its current state) every RequestWaitNoticeSeconds, RecoveryAttempts times
+        /// at most — a send that went out is not a confirmation, only the participant's SketchAck is. After the last send's
+        /// wait it is reported once as not confirmed (never as synchronized). A participant that left owes nothing.
+        /// </summary>
+        void WatchSketchOwed(double now)
+        {
+            if (sketchOwed.Count == 0) return;
+            foreach (var actor in sketchOwed.Keys.ToList())
+            {
+                var o = sketchOwed[actor];
+                if (!session.IsInRoom(actor))
+                {
+                    sketchOwed.Remove(actor);
+                    continue;
+                }
+                if (now < o.NextAt) continue;
+                if (o.Sends >= CoopRules.RecoveryAttempts)
+                {
+                    sketchOwed.Remove(actor);
+                    Debug.LogWarning($"[협동] 참가자 {actor}의 지도 그림 동기화를 확인하지 못했습니다(그림 전체 {o.Sends}회 전송, 확인 없음). 그 기기의 그림이 다를 수 있습니다");
+                    continue;
+                }
+                o.Sends++;
+                o.NextAt = now + CoopRules.RequestWaitNoticeSeconds;
+                SendSketchCopy(actor, 0);
+            }
+        }
+
+        /// <summary>A confirmed drawing change: shown when it is the next revision; a gap or a change that does not fit asks for a whole drawing of at least that revision.</summary>
+        void TakeSketchChange(object content)
+        {
+            if (sketchBoard == null) return;
+            if (!CoopProtocol.TryDecodeSketchChange(content, out var m, out var error))
+            {
+                Debug.LogWarning($"[협동] 호스트의 그림 변경을 받아들이지 않았습니다: {error}");
+                RequestSketchResync(sketchBoard.ConfirmedRevision + 1);   // at least the revision after the shown one was missed
+                return;
+            }
+            if (m.Attempt != entry.Attempt || m.Data.SessionId != game.CoopSessionId) return;
+            if (sketchBoard.ApplyChange(m.Data, out var why) != SketchApply.Gap) return;
+            Debug.LogWarning($"[협동] 그림 변경 {m.Data.Revision}을 적용하지 못했습니다 — {why}. 그림 전체를 호스트에게 요청합니다.");
+            RequestSketchResync(m.Data.Revision);                           // an older whole drawing never ends this
+        }
+
+        void TakeSketchReply(object content)
+        {
+            if (!CoopProtocol.TryDecode(content, out CoopProtocol.SketchReply m, out var error))
+            {
+                Debug.LogWarning($"[협동] 호스트의 그림 응답을 받아들이지 않았습니다: {error}");
+                return;
+            }
+            if (m.Attempt != entry.Attempt || sketchBoard == null || m.SessionId != game.CoopSessionId) return;
+            sketchBoard.ApplyReply(m.RequestId, m.Refused, m.Reason);
+        }
+
+        /// <summary>
+        /// The host's whole drawing (an answer to this device's request, or sent on the host's own): shown when not older
+        /// than the shown one — the confirmed drawing never goes back — and edits it covers (the host's last request of this
+        /// device) are no longer pending. Every whole drawing of this game is confirmed to the host with the revision shown
+        /// now (SketchAck). The recovery ends only with the answer to one of its own requests (token) that was applied and
+        /// reaches the revision it needs; the edits sent before that request and still not covered were then not taken by
+        /// the host (it takes this device's messages in order) and are no longer shown. Nothing else ends it.
+        /// </summary>
+        void TakeSketchCopy(object content)
+        {
+            if (sketchBoard == null) return;
+            if (!CoopProtocol.TryDecodeSketchCopy(content, out var m, out var error))
+            {
+                Debug.LogWarning($"[협동] 호스트의 그림 전체를 받아들이지 않았습니다: {error}");
+                return;
+            }
+            if (m.Attempt != entry.Attempt || m.Sketch.SessionId != game.CoopSessionId) return;
+            var applied = sketchBoard.ApplyCopy(m.Sketch);
+            SendSketchAck();
+            if (!sketchResyncWanted || !applied || !sketchTokenCovers.TryGetValue(m.Token, out var covers) || sketchBoard.ConfirmedRevision < sketchNeed) return;
+            EndSketchRecovery();
+            sketchBoard.AbandonPending(covers, "호스트가 처리하지 않은 그림 변경은 표시하지 않습니다. 다시 그려 주세요");
+        }
+
+        void SendSketchAck()
+        {
+            if (session.IsHost) return;
+            var content = CoopProtocol.Encode(new CoopProtocol.SketchAck { Attempt = entry.Attempt, SessionId = game.CoopSessionId, Revision = sketchBoard.ConfirmedRevision });
+            if (!session.SendToHost(CoopProtocol.SketchAckCode, content))
+                Debug.LogWarning("[협동] 그림 전체를 받았다는 확인을 호스트에게 보내지 못했습니다(호스트가 다시 보내면 다시 확인합니다)");
+        }
+
+        /// <summary>The whole drawing is needed, reaching at least revision `need` (raised when a recovery already runs; the first request goes now).</summary>
+        void RequestSketchResync(long need)
+        {
+            if (session.IsHost || sketchBoard == null) return;
+            sketchNeed = System.Math.Max(sketchNeed, need);
+            if (sketchResyncWanted) return;
+            sketchResyncWanted = true;
+            sketchResyncTries = 0;
+            sketchTokenCovers.Clear();                                      // answers to an earlier recovery's requests never end this one
+            nextSketchResyncAt = Time.realtimeSinceStartupAsDouble;
+        }
+
+        void EndSketchRecovery()
+        {
+            sketchResyncWanted = false;
+            sketchResyncTries = 0;
+            sketchNeed = 0;
+            sketchTokenCovers.Clear();
+        }
+
+        /// <summary>
+        /// This device's drawing recovery: an edit unanswered for RequestWaitNoticeSeconds asks for the whole drawing (a
+        /// time only starts a request; edits are given up only from the host's records). Each request has a new token and
+        /// remembers this device's last edit id; up to RecoveryAttempts requests, RequestWaitNoticeSeconds apart. When the
+        /// last one's wait passes without an answer that ends the recovery, the edits sent before it are no longer shown —
+        /// told as not confirmed (whether the host took them is unknown) — and the synchronization is reported unconfirmed.
+        /// </summary>
+        void CheckSketch(double now)
+        {
+            if (sketchBoard == null || !sketchBoard.Attached) return;
+            if (!sketchResyncWanted && sketchBoard.PendingCount > 0 && now - sketchBoard.OldestPendingAt >= CoopRules.RequestWaitNoticeSeconds)
+                RequestSketchResync(sketchBoard.ConfirmedRevision);
+            if (!sketchResyncWanted || now < nextSketchResyncAt) return;
+            if (sketchResyncTries >= CoopRules.RecoveryAttempts)
+            {
+                var asked = sketchTokenCovers.Count > 0 ? sketchTokenCovers.Values.Max() : 0;
+                EndSketchRecovery();
+                sketchBoard.AbandonPending(asked, "호스트가 그림 변경을 처리했는지 확인하지 못해 표시를 취소했습니다. 다시 그려 주세요");
+                Debug.LogWarning("[협동] 호스트와 지도 그림 동기화를 확인하지 못했습니다. 다른 참가자와 그림이 다를 수 있습니다(다음 변경이나 전체 그림에서 다시 맞춥니다)");
+                return;
+            }
+            sketchResyncTries++;
+            nextSketchResyncAt = now + CoopRules.RequestWaitNoticeSeconds;
+            var token = ++sketchToken;
+            sketchTokenCovers[token] = sketchBoard.LastRequestId;
+            var content = CoopProtocol.Encode(new CoopProtocol.SketchResync { Attempt = entry.Attempt, SessionId = game.CoopSessionId, Have = sketchBoard.ConfirmedRevision, Token = token });
+            if (!session.SendToHost(CoopProtocol.SketchResyncCode, content))
+                Debug.LogWarning($"[협동] 그림 전체 요청({sketchResyncTries}/{CoopRules.RecoveryAttempts})을 보낼 수 없습니다. 잠시 뒤 다시 시도합니다");
         }
 
         // ---- other participants' robots (display only; never a logical change) ------------------------------------------

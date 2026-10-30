@@ -27,10 +27,11 @@ namespace WordRoom.Network
     public static class CoopProtocol
     {
         /// <summary>
-        /// 2: the initial world carries the whole fixed generation settings. 3: exploration messages (107–111); a device
-        /// of another version refuses every message, so mixed builds never start a game together.
+        /// 2: the initial world carries the whole fixed generation settings. 3: exploration messages (107–111). 4: the map
+        /// drawing (117–121). 5: the drawing's recovery tokens and its whole-drawing confirmation (122). A device of
+        /// another version refuses every message, so mixed builds never start a game together.
         /// </summary>
-        public const int Version = 3;
+        public const int Version = 5;
 
         public const byte BeginCode = 101;
         public const byte DataCode = 102;
@@ -49,6 +50,18 @@ namespace WordRoom.Network
         public const byte StopAckCode = 115;
         /// <summary>A participant's real position and heading for the others' display (unreliable, never a logical change).</summary>
         public const byte PoseCode = 116;
+        /// <summary>
+        /// The map drawing, apart from exploration (own revisions, own queue; never part of a Request, an Ack or a Copy):
+        /// a participant's edit to the host, the host's confirmed drawing change to everyone, its answer to an edit that
+        /// changed nothing or was refused, a request for the whole drawing, the whole drawing, and a participant's
+        /// confirmation of the drawing revision it shows after a whole drawing.
+        /// </summary>
+        public const byte SketchRequestCode = 117;
+        public const byte SketchChangeCode = 118;
+        public const byte SketchReplyCode = 119;
+        public const byte SketchResyncCode = 120;
+        public const byte SketchCopyCode = 121;
+        public const byte SketchAckCode = 122;
 
         /// <summary>Largest world coordinate a pose may carry (meters; rooms are a few meters apart, MaxCoordinate of them at most).</summary>
         public const float MaxPoseCoordinate = MaxCoordinate * 10f;
@@ -66,7 +79,10 @@ namespace WordRoom.Network
         public const int MaxVisitsPerPlayer = MaxRooms;
         public const int MaxPathPerPlayer = MaxRooms;
 
-        public static bool IsCoopCode(byte code) => code >= BeginCode && code <= PoseCode;
+        public static bool IsCoopCode(byte code) => code >= BeginCode && code <= SketchAckCode;
+
+        /// <summary>Map drawing messages: kept in arrival order in their own queue (see CoopSession).</summary>
+        public static bool IsSketchCode(byte code) => code >= SketchRequestCode && code <= SketchAckCode;
 
         /// <summary>Exploration messages: kept in arrival order for the game side (see CoopSession).</summary>
         public static bool IsPlayCode(byte code) => code >= RequestCode && code <= StopAckCode;
@@ -757,6 +773,259 @@ namespace WordRoom.Network
             return true;
         }
 
+        // ---- map drawing ---------------------------------------------------------------------------------------
+        /// <summary>Most lines a whole drawing can hold (every participant at its limit).</summary>
+        public const int MaxSketchStrokes = SketchRules.MaxStrokesPerAuthor * CoopRules.MaxPlayers;
+
+        /// <summary>Most coordinates (x and y each) one message carries: the whole drawing's points.</summary>
+        public const int MaxSketchFloats = 2 * SketchRules.MaxTotalPoints;
+
+        /// <summary>
+        /// Upper bound kept for one drawing message (bytes, estimated from the values sent). The limits above keep the
+        /// whole drawing near 140 KiB (16,384 points × 8 bytes plus 12 bytes per line), so this is only a guard; the byte
+        /// size Photon itself allows per message has not been measured here.
+        /// </summary>
+        public const int MaxSketchBytes = 256 * 1024;
+
+        /// <summary>A participant's edit of its own drawing: Add (Size = line width), Erase (Size = radius; Points = the eraser's path) or Clear (no points).</summary>
+        public sealed class SketchRequest
+        {
+            public string Attempt;
+            public string SessionId;
+            public long RequestId;
+            public SketchKind Kind;
+            public float Size;
+            public float[] Points;
+        }
+
+        /// <summary>One confirmed drawing revision from the host (the author is the change's PlayerId, given by the host).</summary>
+        public sealed class SketchChangeMessage
+        {
+            public string Attempt;
+            public SketchChange Data;
+        }
+
+        /// <summary>The host's answer to an edit that changed nothing (Refused false) or was refused (with why); a change is its own answer.</summary>
+        public sealed class SketchReply
+        {
+            public string Attempt;
+            public string SessionId;
+            public long RequestId;
+            public bool Refused;
+            public string Reason;
+        }
+
+        /// <summary>
+        /// A device asks for the whole drawing (it missed a revision, or an edit of its own stays unanswered). Token (≥ 1,
+        /// growing with every request of this device) is sent back in the answer, so the answer to this request is told
+        /// apart from older answers and from whole drawings the host sends on its own.
+        /// </summary>
+        public sealed class SketchResync
+        {
+            public string Attempt;
+            public string SessionId;
+            public long Have;
+            public long Token;
+        }
+
+        /// <summary>The whole drawing of one revision, with every author's last request the host took; Token = the answered request's, 0 when the host sent it on its own.</summary>
+        public sealed class SketchCopy
+        {
+            public string Attempt;
+            public MapSketch Sketch;
+            public long Token;
+        }
+
+        /// <summary>A participant got a whole drawing: the drawing revision it shows now (the host's sign that its whole drawing arrived).</summary>
+        public sealed class SketchAck
+        {
+            public string Attempt;
+            public string SessionId;
+            public long Revision;
+        }
+
+        public static object[] Encode(SketchRequest m) =>
+            new object[] { Version, m.Attempt, m.SessionId, m.RequestId, (int)m.Kind, m.Size, m.Points ?? new float[0] };
+
+        public static object[] Encode(SketchReply m) => new object[] { Version, m.Attempt, m.SessionId, m.RequestId, m.Refused, Cut(m.Reason) };
+
+        public static object[] Encode(SketchResync m) => new object[] { Version, m.Attempt, m.SessionId, m.Have, m.Token };
+
+        public static object[] Encode(SketchAck m) => new object[] { Version, m.Attempt, m.SessionId, m.Revision };
+
+        /// <summary>One revision: identity, author, request, kind, removed line ids and the added lines (ids, widths, point counts, points).</summary>
+        public static object[] EncodeSketchChange(string attempt, SketchChange c)
+        {
+            Lines(c.Added, out var ids, out var widths, out var counts, out var points);
+            return new object[] { Version, attempt, c.SessionId, c.Revision, c.PlayerId, c.RequestId, (int)c.Kind, c.Removed, ids, widths, counts, points };
+        }
+
+        /// <summary>
+        /// The whole drawing: revision, next id, authors with their last requests, then every line (author index, id, width,
+        /// count, points) in drawing order, and the token of the request it answers (0 = sent by the host on its own).
+        /// </summary>
+        public static object[] EncodeSketchCopy(string attempt, MapSketch s, long token)
+        {
+            var lines = s.Strokes;
+            var authors = lines.Select(l => l.Author).Concat(s.LastRequests.Select(kv => kv.Key)).Distinct().ToArray();
+            var last = authors.Select(a => (object)s.LastRequestOf(a)).ToArray();
+            var authorOf = lines.Select(l => Array.IndexOf(authors, l.Author)).ToArray();
+            Lines(lines, out var ids, out var widths, out var counts, out var points);
+            return new object[] { Version, attempt, s.SessionId, s.Revision, s.NextId, authors, last, authorOf, ids, widths, counts, points, token };
+        }
+
+        /// <summary>Whether `s` stays inside what a receiver's TryDecodeSketchCopy accepts and MaxSketchBytes (otherwise it is not sent as a success).</summary>
+        public static bool FitsSketch(MapSketch s, out string why)
+        {
+            var bytes = SketchBytes(s.Strokes.Count, s.TotalPoints);
+            if (s.Strokes.Count > MaxSketchStrokes) why = $"선 {s.Strokes.Count}개(최대 {MaxSketchStrokes})";
+            else if (s.TotalPoints > SketchRules.MaxTotalPoints) why = $"점 {s.TotalPoints}개(최대 {SketchRules.MaxTotalPoints})";
+            else if (bytes > MaxSketchBytes) why = $"약 {bytes / 1024} KiB(최대 {MaxSketchBytes / 1024} KiB)";
+            else why = null;
+            return why == null;
+        }
+
+        /// <summary>Estimated bytes of a drawing message with `lines` lines of `points` points in all (values only, a small fixed part).</summary>
+        public static int SketchBytes(int lines, int points) => 256 + lines * 16 + points * 8;
+
+        static void Lines(IReadOnlyList<SketchStroke> lines, out int[] ids, out float[] widths, out int[] counts, out float[] points)
+        {
+            ids = new int[lines.Count];
+            widths = new float[lines.Count];
+            counts = new int[lines.Count];
+            var all = new List<float>();
+            for (var i = 0; i < lines.Count; i++)
+            {
+                ids[i] = lines[i].Id;
+                widths[i] = lines[i].Width;
+                counts[i] = lines[i].Count;
+                lines[i].CopyTo(all);
+            }
+            points = all.ToArray();
+        }
+
+        public static bool TryDecode(object content, out SketchRequest m, out string error)
+        {
+            m = null;
+            if (!Head(content, 7, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Long(a, 3, out var id, ref error) ||
+                !Int(a, 4, out var kind, ref error) || !Flt(a, 5, out var size, ref error) || !Flts(a, 6, 2 * SketchRules.MaxStrokePoints, out var points, ref error))
+                return false;
+            if (id < 1) return Bad($"그림 요청 번호 {id}", out error);
+            if (!SketchKindOk(kind)) return Bad($"그림 요청 종류 {kind}", out error);
+            if ((SketchKind)kind == SketchKind.Clear ? points.Length != 0 : !MapSketch.ValidPoints(points, out var why)) return Bad("그림 요청의 점", out error);
+            m = new SketchRequest { Attempt = attempt, SessionId = session, RequestId = id, Kind = (SketchKind)kind, Size = size, Points = points };
+            return true;
+        }
+
+        public static bool TryDecode(object content, out SketchReply m, out string error)
+        {
+            m = null;
+            if (!Head(content, 6, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Long(a, 3, out var id, ref error) ||
+                !Bool(a, 4, out var refused, ref error) || !Str(a, 5, MaxTextLength, true, out var reason, ref error))
+                return false;
+            if (id < 1) return Bad($"그림 요청 번호 {id}", out error);
+            m = new SketchReply { Attempt = attempt, SessionId = session, RequestId = id, Refused = refused, Reason = reason };
+            return true;
+        }
+
+        public static bool TryDecode(object content, out SketchResync m, out string error)
+        {
+            m = null;
+            if (!Head(content, 5, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Long(a, 3, out var have, ref error) ||
+                !Long(a, 4, out var token, ref error)) return false;
+            if (have < 0 || token < 1) return Bad($"그림 전체 요청의 순번 {have}·번호 {token}", out error);
+            m = new SketchResync { Attempt = attempt, SessionId = session, Have = have, Token = token };
+            return true;
+        }
+
+        public static bool TryDecode(object content, out SketchAck m, out string error)
+        {
+            m = null;
+            if (!Head(content, 4, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Long(a, 3, out var revision, ref error)) return false;
+            if (revision < 0) return Bad($"그림 적용 순번 {revision}", out error);
+            m = new SketchAck { Attempt = attempt, SessionId = session, Revision = revision };
+            return true;
+        }
+
+        /// <summary>One drawing revision, checked for its own form (sizes, finite coordinates, widths); whether it fits the receiver's drawing is MapSketch.Apply's check.</summary>
+        public static bool TryDecodeSketchChange(object content, out SketchChangeMessage m, out string error)
+        {
+            m = null;
+            if (!Head(content, 12, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Long(a, 3, out var revision, ref error) ||
+                !Id(a, 4, out var player, ref error) || !Long(a, 5, out var id, ref error) || !Int(a, 6, out var kind, ref error) ||
+                !Ints(a, 7, MaxSketchStrokes, out var removed, ref error) || !Ints(a, 8, MaxSketchStrokes, out var ids, ref error) ||
+                !Flts(a, 9, MaxSketchStrokes, out var widths, ref error) || !Ints(a, 10, MaxSketchStrokes, out var counts, ref error) ||
+                !Flts(a, 11, MaxSketchFloats, out var points, ref error))
+                return false;
+            if (revision < 1 || id < 1) return Bad("그림 순번·요청 번호", out error);
+            if (!SketchKindOk(kind)) return Bad($"그림 변경 종류 {kind}", out error);
+            if (!TryLines(ids, widths, counts, points, i => player, out var added, out error)) return false;
+            m = new SketchChangeMessage
+            {
+                Attempt = attempt,
+                Data = new SketchChange { SessionId = session, Revision = revision, PlayerId = player, RequestId = id, Kind = (SketchKind)kind, Removed = removed, Added = added },
+            };
+            return true;
+        }
+
+        /// <summary>The whole drawing, checked like a change and then restored (MapSketch.Restore checks ids, order, authors and limits).</summary>
+        public static bool TryDecodeSketchCopy(object content, out SketchCopy m, out string error)
+        {
+            m = null;
+            if (!Head(content, 13, out var a, out error)) return false;
+            if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Long(a, 3, out var revision, ref error) ||
+                !Int(a, 4, out var nextId, ref error) || !Strs(a, 5, SketchRules.MaxAuthors, MaxIdLength, out var authors, ref error) ||
+                !Ints(a, 7, MaxSketchStrokes, out var authorOf, ref error) || !Ints(a, 8, MaxSketchStrokes, out var ids, ref error) ||
+                !Flts(a, 9, MaxSketchStrokes, out var widths, ref error) || !Ints(a, 10, MaxSketchStrokes, out var counts, ref error) ||
+                !Flts(a, 11, MaxSketchFloats, out var points, ref error) || !Long(a, 12, out var token, ref error))
+                return false;
+            if (token < 0) return Bad($"그림 전체 응답 번호 {token}", out error);
+            var last = a[6] as object[];
+            if (last == null || last.Length != authors.Length || last.Any(v => !(v is long n) || n < 0)) return Bad("그림 상태의 요청 기록", out error);
+            if (authors.Distinct().Count() != authors.Length) return Bad("그림 상태의 작성자", out error);
+            if (authorOf.Length != ids.Length || authorOf.Any(i => i < 0 || i >= authors.Length)) return Bad("그림 상태의 작성자 번호", out error);
+            if (!TryLines(ids, widths, counts, points, i => authors[authorOf[i]], out var lines, out error)) return false;
+            var requests = authors.Select((p, i) => new KeyValuePair<string, long>(p, (long)last[i])).ToList();
+            var sketch = MapSketch.Restore(session, revision, nextId, lines, requests, out var why);
+            if (sketch == null) return Bad(why, out error);
+            m = new SketchCopy { Attempt = attempt, Sketch = sketch, Token = token };
+            return true;
+        }
+
+        /// <summary>Lines from parallel arrays: equal lengths, ids ≥ 1, 1..MaxStrokePoints points each, valid widths, finite points in range, every point used.</summary>
+        static bool TryLines(int[] ids, float[] widths, int[] counts, float[] points, Func<int, string> author, out SketchStroke[] lines, out string error)
+        {
+            lines = null;
+            error = null;
+            if (ids.Length != widths.Length || ids.Length != counts.Length) return Bad("그림 선 배열 길이가 서로 맞지 않음", out error);
+            var total = 0L;
+            foreach (var c in counts)
+            {
+                if (c < 1 || c > SketchRules.MaxStrokePoints) return Bad($"그림 선의 점 수 {c}", out error);
+                total += c;
+            }
+            if (total * 2 != points.Length) return Bad("그림 점 배열 길이", out error);
+            if (points.Any(v => Math.Abs(v) > SketchRules.MaxCoordinate)) return Bad("그림 좌표 범위", out error);
+            lines = new SketchStroke[ids.Length];
+            var at = 0;
+            for (var i = 0; i < ids.Length; i++)
+            {
+                if (ids[i] < 1 || !MapSketch.ValidWidth(widths[i])) return Bad($"그림 선 {ids[i]}", out error);
+                var xy = new float[counts[i] * 2];
+                Array.Copy(points, at, xy, 0, xy.Length);
+                at += xy.Length;
+                lines[i] = new SketchStroke(ids[i], author(i), widths[i], xy);
+            }
+            return true;
+        }
+
+        static bool SketchKindOk(int kind) => kind == (int)SketchKind.Add || kind == (int)SketchKind.Erase || kind == (int)SketchKind.Clear;
+
         // ---- checks --------------------------------------------------------------------------------------------
         static bool Head(object content, int length, out object[] a, out string error)
         {
@@ -862,6 +1131,15 @@ namespace WordRoom.Network
             if (v != null && v.Length <= max) return true;
             v = null;
             return Bad($"{i}번 값(정수 배열)", out error);
+        }
+
+        /// <summary>A float array of finite values (NaN and infinities are refused).</summary>
+        static bool Flts(object[] a, int i, int max, out float[] v, ref string error)
+        {
+            v = a[i] as float[];
+            if (v != null && v.Length <= max && v.All(x => !float.IsNaN(x) && !float.IsInfinity(x))) return true;
+            v = null;
+            return Bad($"{i}번 값(유한한 실수 배열)", out error);
         }
 
         static bool Strs(object[] a, int i, int max, int maxLength, out string[] v, ref string error)
