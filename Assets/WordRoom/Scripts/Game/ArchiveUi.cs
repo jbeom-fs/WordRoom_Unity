@@ -24,6 +24,9 @@ namespace WordRoom.Game
         public static readonly Color32 Focused = new Color32(0x6E, 0x55, 0x37, 255);         // keyboard selection, brass-tinted
         public static readonly Color32 Chosen = new Color32(0x86, 0x69, 0x3C, 255);          // chosen option (difficulty)
         public static readonly Color32 Disabled = new Color32(0x3A, 0x32, 0x2D, 150);
+        public static readonly Color32 SpentFill = new Color32(0x1A, 0x14, 0x11, 255);       // #1A1411 끼임방지 not usable (used, waiting)
+        public static readonly Color32 SpentText = new Color32(0x7A, 0x6F, 0x63, 255);       // #7A6F63
+        public static readonly Color32 SpentFrame = new Color32(0x5A, 0x4A, 0x30, 255);      // #5A4A30 dimmed brass
         public static readonly Color32 Brass = new Color32(0xA8, 0x87, 0x4B, 255);           // #A8874B
         public static readonly Color32 Ivory = new Color32(0xF2, 0xEB, 0xDD, 255);           // #F2EBDD
         public static readonly Color32 IvoryDim = new Color32(0xD8, 0xD0, 0xBF, 255);        // #D8D0BF

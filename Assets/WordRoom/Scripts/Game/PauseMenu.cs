@@ -26,7 +26,8 @@ namespace WordRoom.Game
     /// are incomplete it reports once and leaves Escape to the player (cursor release), so play is never stuck.
     /// 끼임방지 (optional button, "끼임방지 (1회)"): asks RoomGenerationDebug for one return to the start room. The button
     /// can be pressed only when the game allows it (CanRequestUnstuck: placed, running, nothing of this device waiting,
-    /// its one use of this game not spent) and stays visible but disabled otherwise — also after the use. The menu closes
+    /// its one use of this game not spent) and stays visible but disabled otherwise — also after the use, then drawn
+    /// darker (fill, label and frame dimmed) so the spent button is told apart at a glance. The menu closes
     /// by itself once the body stands in the start room (UnstuckFinished true); input then resumes as after 계속. A
     /// failure is logged (a coop refusal is also told on screen by the game). Without the button the rest of the menu is
     /// unchanged (reported once).
@@ -71,6 +72,9 @@ namespace WordRoom.Game
         bool leaving;
         bool unstuckUsable;
         System.Action<bool, string> onUnstuck;
+        Graphic[] unstuckParts;                                              // label and brass frame, dimmed while disabled
+        Color[] unstuckPartColors;
+        bool unstuckDimmed;
 
         public bool IsOpen => open;
 
@@ -129,6 +133,15 @@ namespace WordRoom.Game
                 return;
             }
             lockable = new[] { continueButton, settingsButton, mainMenuButton, quitButton, unstuckButton };
+            var colors = unstuckButton.colors;
+            colors.disabledColor = ArchiveUi.SpentFill;                      // clearly darker than the usable walnut
+            unstuckButton.colors = colors;
+            var parts = new List<Graphic>();
+            foreach (var g in unstuckButton.GetComponentsInChildren<Graphic>(true))
+                if (g != unstuckButton.targetGraphic) parts.Add(g);
+            unstuckParts = parts.ToArray();
+            unstuckPartColors = new Color[unstuckParts.Length];
+            for (var i = 0; i < unstuckParts.Length; i++) unstuckPartColors[i] = unstuckParts[i].color;
             ArchiveUi.Bind(bindings, unstuckButton, RequestUnstuck);
             onUnstuck = OnUnstuckFinished;
             game.UnstuckFinished += onUnstuck;
@@ -159,6 +172,20 @@ namespace WordRoom.Game
             if (!unstuckUsable) return;
             var interactable = game.CanRequestUnstuck(out _) && !leaving;
             if (unstuckButton.interactable != interactable) unstuckButton.interactable = interactable;
+            DimUnstuck(!interactable);
+        }
+
+        /// <summary>Disabled: the label and the frame turn dim too (only the fill follows the color block); enabled: their saved colors.</summary>
+        void DimUnstuck(bool dim)
+        {
+            if (unstuckDimmed == dim) return;
+            unstuckDimmed = dim;
+            for (var i = 0; i < unstuckParts.Length; i++)
+            {
+                if (unstuckParts[i] == null) continue;
+                unstuckParts[i].color = !dim ? unstuckPartColors[i]
+                    : unstuckParts[i] is TMP_Text ? (Color)ArchiveUi.SpentText : ArchiveUi.SpentFrame;
+            }
         }
 
         void Update()

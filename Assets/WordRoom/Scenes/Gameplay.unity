@@ -1078,8 +1078,8 @@ MonoBehaviour:
   targetGuidance: 1
   guidanceStrength: 0
   guidanceStart: 10
-  guidanceRamp: 40
-  guidanceMax: 0.03
+  guidanceRamp: 20
+  guidanceMax: 0.09
   guidanceBasis: 0
   useMoveLimit: 0
   maxMoves: 3

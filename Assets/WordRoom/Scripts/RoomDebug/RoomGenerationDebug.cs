@@ -59,12 +59,12 @@ namespace WordRoom.RoomDebug
         [SerializeField] int minWordLength = 1;
         [SerializeField] int maxWordLength = 8;
 
-        [Header("목표 유도 (Python 1.1.0 기본: 켬, 0 → 0.03, 10부터 40에 걸쳐, 고유 방문 방 수)")]
+        [Header("목표 유도 (현재 기본: 켬, 0 → 0.09, 10부터 20에 걸쳐, 고유 방문 방 수 · Python 1.1.0 값 0.03·40에서 조정)")]
         [SerializeField] bool targetGuidance = true;
         [SerializeField] double guidanceStrength = 0.0;
         [SerializeField] int guidanceStart = 10;
-        [SerializeField] int guidanceRamp = 40;
-        [SerializeField] double guidanceMax = 0.03;
+        [SerializeField] int guidanceRamp = 20;
+        [SerializeField] double guidanceMax = 0.09;
         [SerializeField] GuidanceBasisOption guidanceBasis = GuidanceBasisOption.고유방문방수;
 
         [Header("테스트 전용 이동 제한 (기본 꺼짐: 일반 플레이는 제한 없음)")]

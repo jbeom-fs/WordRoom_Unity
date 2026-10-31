@@ -34,8 +34,8 @@ namespace WordRoom.Generation
         public bool TargetGuidance = true;
         public double GuidanceStrength = 0.0;
         public int GuidanceStart = 10;
-        public int GuidanceRamp = 40;
-        public double GuidanceMax = 0.03;
+        public int GuidanceRamp = 20;
+        public double GuidanceMax = 0.09;
         public string GuidanceBasis = "unique";      // 'unique' (distinct rooms visited) or 'moves'
         /// <summary>
         /// Test-only move limit. Off by default: normal play has no move limit. Never turned on by settings.json
