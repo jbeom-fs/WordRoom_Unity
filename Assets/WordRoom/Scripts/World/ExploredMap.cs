@@ -48,6 +48,7 @@ namespace WordRoom.World
                 if (u.TeamFirstVisit) m.visited.Add(u.To);
                 if (u.PlayerId != null) m.players.Add(new KeyValuePair<string, GridPos>(u.PlayerId, u.To));
             }
+            else if (u.Kind == "return" && u.PlayerId != null) m.players.Add(new KeyValuePair<string, GridPos>(u.PlayerId, u.To));   // back in the start room: no visit
             return m;
         }
 
@@ -65,6 +66,7 @@ namespace WordRoom.World
                 if (c.TeamFirstVisit) m.visited.Add(c.To);
                 m.players.Add(new KeyValuePair<string, GridPos>(c.PlayerId, c.To));
             }
+            else if (c.Kind == RequestKind.Return) m.players.Add(new KeyValuePair<string, GridPos>(c.PlayerId, c.To));   // back in the start room: no visit
             return m;
         }
 

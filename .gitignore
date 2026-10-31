@@ -115,3 +115,5 @@ InitTestScene*.unity*
 /DataPackages/
 /DataValidation/
 __pycache__/
+
+.fake

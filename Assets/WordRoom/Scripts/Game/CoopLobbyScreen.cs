@@ -27,7 +27,8 @@ namespace WordRoom.Game
     /// disabled, the application loses focus, and right before a join (a failed join needs two new clicks).
     /// Waiting room: display name, RoomCode with 복사, count, participants with host and ready badges, the local
     /// ready toggle, 나가기 (the lobby comes back once Photon confirmed the leave), the host's difficulty (쉬움·보통·어려움,
-    /// 보통 first; only the host can change it, a change voids every ready) and 시작 — enabled for the host only while
+    /// 보통 first; only the host can change it, a change voids every ready) and 시작 — shown to the host only (hidden for a
+    /// guest, recomputed on every redraw), enabled while
     /// 2–4 participants are all ready for the current settings and nothing starts; the click goes to the coop session,
     /// which checks everything again and starts the coop game (never a single-player game).
     /// Escape does one thing per press: an input field being typed in keeps it, else the create panel closes, the
@@ -533,6 +534,9 @@ namespace WordRoom.Game
             RefreshDifficulty(host, canAct);
             var canStart = hasDifficulty && CanStartNow(out readyCount);
             view.startButton.interactable = canStart;                     // the session checks every condition again on the click
+            if (!host && EventSystem.current != null && EventSystem.current.currentSelectedGameObject == view.startButton.gameObject)
+                ArchiveUi.Select(view.readyButton.gameObject);             // never a selection left on a hidden button
+            SetActive(view.startButton.gameObject, host);                 // a guest never sees 시작 (recomputed on every redraw: host change, re-entry)
             if (starting)
                 view.startNote.text = "게임을 시작하는 중입니다…";
             else if (settings == SettingsState.Waiting)

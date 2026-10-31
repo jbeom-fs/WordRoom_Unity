@@ -189,6 +189,7 @@ namespace WordRoom.EditorTools
             Size(title.gameObject, 392f, 60f);
             AddButton(list, "ContinueButton", "계속", 360f, 64f, 26f);
             AddButton(list, "SettingsButton", "설정", 360f, 64f, 26f);
+            AddUnstuck(list, -1);                                               // 끼임방지 (1회) (PauseMenu)
             AddButton(list, "MainMenuButton", "메인 메뉴", 360f, 64f, 26f);
             AddButton(list, "QuitButton", "종료", 360f, 64f, 26f);
 
@@ -219,6 +220,7 @@ namespace WordRoom.EditorTools
             var spacer = NewRect("Spacer", panel);
             Size(spacer.gameObject, 464f, 8f);
             AddButton(panel, "MainMenuButton", "메인 메뉴", 360f, 68f, 28f);
+            AddCoopResult(root, panel, new[] { title.gameObject, panel.Find("TimeRow").gameObject, panel.Find("VisitedRow").gameObject }, spacer.GetSiblingIndex());   // coop part, inactive
             return root;
         }
 

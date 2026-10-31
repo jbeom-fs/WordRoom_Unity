@@ -1224,6 +1224,7 @@ MonoBehaviour:
   mainMenuButton: {fileID: 1434477652}
   quitButton: {fileID: 1434477651}
   map: {fileID: 80028698}
+  unstuckButton: {fileID: 1243351493}
   legacyFont: {fileID: 11400000, guid: 52be4e75225fdda49b530d9775753c59, type: 2}
   legacyUiMigrated: 1
 --- !u!114 &80028696
@@ -1262,6 +1263,7 @@ MonoBehaviour:
   timeText: {fileID: 365624714}
   visitedText: {fileID: 365624713}
   mainMenuButton: {fileID: 365624712}
+  coopResult: {fileID: 1973396633}
 --- !u!114 &80028698
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1707,6 +1709,17 @@ AudioListener:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1232969872}
   m_Enabled: 1
+--- !u!114 &1243351493 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 3529553184559512508, guid: a6aa8fb5f5129ba41821f91c42c6c72a, type: 3}
+  m_PrefabInstance: {fileID: 1434477648}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4e29b1a8efbd4b44bb3f3716e73f07ff, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Button
 --- !u!1001 &1300569967
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -2190,6 +2203,17 @@ MonoBehaviour:
   pitchLimit: 85
   viewHomeSaved: 1
   viewHomeLocalPosition: {x: 0, y: 1.6, z: 0}
+--- !u!114 &1973396633 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 2813593058319593166, guid: 771b352471ba6d845b53360703e17bff, type: 3}
+  m_PrefabInstance: {fileID: 365624710}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 365624711}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c6ba44f42dea7a142ab9917f5550bcab, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: WordRoom.Game::WordRoom.Game.CoopResultView
 --- !u!1 &2004481427
 GameObject:
   m_ObjectHideFlags: 0

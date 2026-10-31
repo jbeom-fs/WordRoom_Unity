@@ -14,6 +14,12 @@ namespace WordRoom.Generation
         Enter,
         /// <summary>Development arrow keys: enter an existing neighbor, then fill around it (no door).</summary>
         Move,
+        /// <summary>
+        /// 끼임방지: the requester goes back to the start room (GridPos.Origin) — no fill, no move, no visit, no goal; the
+        /// return is recorded apart from the path. Allowed from any confirmed room, the start room too (the body may be stuck there),
+        /// once per player per game (a player with a confirmed return is refused; a refused or never received request uses nothing).
+        /// </summary>
+        Return,
     }
 
     /// <summary>
@@ -349,6 +355,11 @@ namespace WordRoom.Generation
                         u = EnterRoom(player, dest, word, "move");
                         u.Fill = generator.Fill(world, new GenerationContext(dest, GuidanceProgress(session, world, player), token));   // also for the target room (1.1.0)
                         break;
+                    case RequestKind.Return:
+                        changed = true;
+                        player.ReturnToStart();                            // rooms, doors, recent words, visits, moves and the status stay
+                        u = new GenerationUpdate { Kind = "return", From = from, To = GridPos.Origin, Moved = false, FirstVisit = false, TeamFirstVisit = false };
+                        break;
                 }
             }
             finally
@@ -360,7 +371,7 @@ namespace WordRoom.Generation
             return new Handled { Update = u };
         }
 
-        static bool IsDefined(RequestKind k) => k == RequestKind.Prepare || k == RequestKind.Enter || k == RequestKind.Move;
+        static bool IsDefined(RequestKind k) => k == RequestKind.Prepare || k == RequestKind.Enter || k == RequestKind.Move || k == RequestKind.Return;
 
         static bool IsDefined(Direction d) => d == Direction.Up || d == Direction.Down || d == Direction.Left || d == Direction.Right;
 
@@ -376,6 +387,8 @@ namespace WordRoom.Generation
             if (player == null) return $"이 세션에 등록되지 않은 플레이어입니다({r.PlayerId}).";
             var from = player.Position;
             if (r.ExpectedFrom != from) return $"요청의 출발 좌표 {r.ExpectedFrom}이 확정 위치 {from}와 다릅니다.";
+            if (r.Kind == RequestKind.Return)                             // the start room always exists (and was prepared by the start)
+                return player.Returns > 0 ? "끼임방지는 한 게임에 한 번만 사용할 수 있습니다." : null;   // once per player per game; a repeated RequestId never gets here
             if (r.Kind == RequestKind.Move && !world.HasAnyNeighbor(from)) return "현재 방에 생성된 인접 방이 없습니다.";   // this player only; the session goes on
             dest = from.Add(Directions.Offset(r.Direction));
             var side = Directions.Korean(r.Direction);
@@ -410,6 +423,7 @@ namespace WordRoom.Generation
             u.RequestId = requestId;
             u.Revision = session.Revision;
             u.Moves = player?.Moves ?? 0;
+            u.Returns = player?.Returns ?? 0;
             u.Status = session.Status;
             u.Arrived = u.Moved && session.Status == "success";
             u.GuidanceStrength = generator.Guidance(GuidanceProgress(session, world, player));

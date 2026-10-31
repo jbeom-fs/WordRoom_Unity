@@ -151,8 +151,9 @@ namespace WordRoom.Generation
     public sealed class GenerationUpdate
     {
         /// <summary>
-        /// "start", "move" (enter + fill), "prepare" (fill around an adjacent room, no move; Moved false) or
-        /// "enter" (move into a prepared room, no fill; Fill null).
+        /// "start", "move" (enter + fill), "prepare" (fill around an adjacent room, no move; Moved false),
+        /// "enter" (move into a prepared room, no fill; Fill null) or "return" (끼임방지: the requester's position back to
+        /// the start room; not a move or visit — Moved false, Fill null, never the goal).
         /// </summary>
         public string Kind;
         public string SessionId;
@@ -169,6 +170,8 @@ namespace WordRoom.Generation
         public bool TeamFirstVisit;
         /// <summary>The requesting player's moves after this change.</summary>
         public int Moves;
+        /// <summary>The requesting player's returns to the start room (끼임방지) after this change.</summary>
+        public int Returns;
         public string Status;
         public bool Arrived;
         public double GuidanceStrength;

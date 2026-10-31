@@ -13,7 +13,7 @@ namespace WordRoom.Network
     /// CoopSession with the event's sender, never with a value in the body. GenerationUpdate, SessionCopy and
     /// FillReport objects are never sent; the initial world is sent as its coordinates, words, preparation, doors,
     /// team visits and players only (no relation data, vectors, recent words or generation reports).
-    /// Exploration (after the common start): a participant's door or entry request goes to the host (the PlayerId is
+    /// Exploration (after the common start): a participant's door, entry or return-to-start (끼임방지, its own only) request goes to the host (the PlayerId is
     /// the event's sender, never a body value); the host answers the requester (Reply: the request's outcome — accepted
     /// with the confirmed revision, refused, failed with the revision after it, pending or unknown) and sends every
     /// confirmed change to everyone (Change: one revision, applied in order); each device tells the host the revision it
@@ -28,10 +28,12 @@ namespace WordRoom.Network
     {
         /// <summary>
         /// 2: the initial world carries the whole fixed generation settings. 3: exploration messages (107–111). 4: the map
-        /// drawing (117–121). 5: the drawing's recovery tokens and its whole-drawing confirmation (122). A device of
-        /// another version refuses every message, so mixed builds never start a game together.
+        /// drawing (117–121). 5: the drawing's recovery tokens and its whole-drawing confirmation (122). 6: the return to
+        /// the start room (끼임방지): Return requests and changes (with the requester's return count) and every player's
+        /// return marks in the initial world and whole states. A device of another version refuses every message, so
+        /// mixed builds never start a game together.
         /// </summary>
-        public const int Version = 5;
+        public const int Version = 6;
 
         public const byte BeginCode = 101;
         public const byte DataCode = 102;
@@ -78,6 +80,8 @@ namespace WordRoom.Network
         public const int MaxCoordinate = 100000;
         public const int MaxVisitsPerPlayer = MaxRooms;
         public const int MaxPathPerPlayer = MaxRooms;
+        /// <summary>Return marks (끼임방지) one player's state may carry.</summary>
+        public const int MaxReturnsPerPlayer = MaxRooms;
 
         public static bool IsCoopCode(byte code) => code >= BeginCode && code <= SketchAckCode;
 
@@ -286,12 +290,12 @@ namespace WordRoom.Network
 
         static bool HasRevision(RequestOutcome o) => o == RequestOutcome.Accepted || o == RequestOutcome.Failed;
 
-        /// <summary>One confirmed change: identity, requester, kind, from/to, door, added rooms, team first visit, moves, status, result.</summary>
+        /// <summary>One confirmed change: identity, requester, kind, from/to, door, added rooms, team first visit, moves, status, result, returns.</summary>
         public static object[] EncodeChange(string attempt, SessionChange c) => new object[]
         {
             Version, attempt, c.SessionId, c.Revision, c.PlayerId, c.RequestId, (int)c.Kind, c.From.X, c.From.Y, c.To.X, c.To.Y, c.DoorOpened,
             c.Added.Select(kv => kv.Key.X).ToArray(), c.Added.Select(kv => kv.Key.Y).ToArray(), c.Added.Select(kv => kv.Value).ToArray(),
-            c.TeamFirstVisit, c.Moves, c.Status ?? "", EncodeResult(c.Result),
+            c.TeamFirstVisit, c.Moves, c.Status ?? "", EncodeResult(c.Result), c.Returns,
         };
 
         /// <summary>
@@ -319,7 +323,9 @@ namespace WordRoom.Network
         {
             var visits = copy.Players.Sum(p => p.Visits.Count);
             var path = copy.Players.Sum(p => p.Path.Count);
+            var returns = copy.Players.Sum(p => p.Returns);
             if (copy.Rooms.Count > MaxRooms || copy.Prepared.Count > MaxRooms || copy.TeamVisited.Count > MaxRooms) why = $"방 {copy.Rooms.Count}개(최대 {MaxRooms})";
+            else if (returns > MaxReturnsPerPlayer * CoopRules.MaxPlayers) why = $"시작 방 복귀 기록 {returns}개(최대 {MaxReturnsPerPlayer * CoopRules.MaxPlayers})";
             else if (copy.OpenDoors.Count > MaxRooms * 2) why = $"열린 문 {copy.OpenDoors.Count}개(최대 {MaxRooms * 2})";
             else if (copy.Players.Count > CoopRules.MaxPlayers) why = $"플레이어 {copy.Players.Count}명";
             else if (visits > MaxVisitsPerPlayer * CoopRules.MaxPlayers) why = $"방문 기록 {visits}개";
@@ -411,8 +417,15 @@ namespace WordRoom.Network
             var pOwner = new List<int>();
             var px = new List<int>();
             var py = new List<int>();
+            var rOwner = new List<int>();
+            var rAt = new List<int>();
             for (var i = 0; i < players.Count; i++)
             {
+                foreach (var mark in players[i].ReturnMarks)
+                {
+                    rOwner.Add(i);
+                    rAt.Add(mark);
+                }
                 foreach (var v in players[i].Visits)
                 {
                     vOwner.Add(i);
@@ -438,16 +451,18 @@ namespace WordRoom.Network
                 players.Select(p => p.Position.X).ToArray(), players.Select(p => p.Position.Y).ToArray(), players.Select(p => p.Moves).ToArray(),
                 vOwner.ToArray(), vx.ToArray(), vy.ToArray(), vc.ToArray(),
                 pOwner.ToArray(), px.ToArray(), py.ToArray(),
+                rOwner.ToArray(), rAt.ToArray(),
             };
         }
 
-        /// <summary>Index of each part of the initial world message (version 2).</summary>
+        /// <summary>Index of each part of the initial world message (version 2; the return marks since version 6).</summary>
         public static class WorldIndex
         {
             public const int Attempt = 1, Host = 2, Actors = 3, PlayerIds = 4, Difficulty = 5, PackageId = 6, Config = 7, SessionId = 8, Revision = 9,
                 Status = 10, StartWord = 11, TargetWord = 12, RoomX = 13, RoomY = 14, RoomWord = 15, PreparedX = 16, PreparedY = 17,
                 DoorAX = 18, DoorAY = 19, DoorBX = 20, DoorBY = 21, TeamX = 22, TeamY = 23, PlayerX = 24, PlayerY = 25, Moves = 26,
-                VisitOwner = 27, VisitX = 28, VisitY = 29, VisitCount = 30, PathOwner = 31, PathX = 32, PathY = 33, Length = 34;
+                VisitOwner = 27, VisitX = 28, VisitY = 29, VisitCount = 30, PathOwner = 31, PathX = 32, PathY = 33, ReturnOwner = 34, ReturnAt = 35,
+                Length = 36;
         }
 
         const int WorldLength = WorldIndex.Length;
@@ -612,28 +627,32 @@ namespace WordRoom.Network
         public static bool TryDecodeChange(object content, int wordCount, out Change m, out string error)
         {
             m = null;
-            if (!Head(content, 19, out var a, out error)) return false;
+            if (!Head(content, 20, out var a, out error)) return false;
             if (!Id(a, 1, out var attempt, ref error) || !Id(a, 2, out var session, ref error) || !Long(a, 3, out var revision, ref error) ||
                 !Id(a, 4, out var player, ref error) || !Long(a, 5, out var id, ref error) || !Int(a, 6, out var kind, ref error) ||
                 !Int(a, 7, out var fx, ref error) || !Int(a, 8, out var fy, ref error) || !Int(a, 9, out var tx, ref error) || !Int(a, 10, out var ty, ref error) ||
                 !Bool(a, 11, out var opened, ref error) || !Ints(a, 12, MaxAddedRooms, out var ax, ref error) || !Ints(a, 13, MaxAddedRooms, out var ay, ref error) ||
                 !Ints(a, 14, MaxAddedRooms, out var aw, ref error) || !Bool(a, 15, out var teamFirst, ref error) || !Int(a, 16, out var moves, ref error) ||
-                !Str(a, 17, MaxStatusLength, false, out var status, ref error))
+                !Str(a, 17, MaxStatusLength, false, out var status, ref error) || !Int(a, 19, out var returns, ref error))
                 return false;
-            if (revision < 2 || id < 1 || moves < 0) return Bad("변경 순번·요청 번호·이동 수", out error);
+            if (revision < 2 || id < 1 || moves < 0 || returns < 0) return Bad("변경 순번·요청 번호·이동 수·복귀 수", out error);
             if (!PlayKind(kind)) return Bad($"변경 종류 {kind}", out error);
             if (!Coord(fx) || !Coord(fy) || !Coord(tx) || !Coord(ty) || !Coords(ax) || !Coords(ay)) return Bad("좌표 범위", out error);
             var from = new GridPos(fx, fy);
             var to = new GridPos(tx, ty);
-            if (GridPos.Distance(from, to) != 1) return Bad($"이동 {from}→{to}", out error);
+            if ((RequestKind)kind == RequestKind.Return)
+            {
+                if (to != GridPos.Origin || opened || ax.Length > 0 || teamFirst || returns < 1) return Bad($"시작 방 복귀 {from}→{to}", out error);   // never a move, room, door or visit
+            }
+            else if (GridPos.Distance(from, to) != 1) return Bad($"이동 {from}→{to}", out error);
             if (ax.Length != ay.Length || ax.Length != aw.Length) return Bad("추가된 방 배열 길이", out error);
             if (aw.Any(w => !Word(w, wordCount))) return Bad("추가된 방 단어 번호", out error);
             if (!TryDecodeResult(a[18], out var result, out error)) return false;
-            if (result != null && (status != "success" || result.Revision != revision)) return Bad("결과와 세션 상태·순번", out error);
+            if (result != null && (status != "success" || result.Revision != revision || (RequestKind)kind == RequestKind.Return)) return Bad("결과와 세션 상태·순번", out error);
             var c = new SessionChange
             {
                 SessionId = session, Revision = revision, PlayerId = player, RequestId = id, Kind = (RequestKind)kind, From = from, To = to,
-                DoorOpened = opened, TeamFirstVisit = teamFirst, Moves = moves, Status = status, Result = result,
+                DoorOpened = opened, TeamFirstVisit = teamFirst, Moves = moves, Returns = returns, Status = status, Result = result,
             };
             for (var i = 0; i < ax.Length; i++) c.Added.Add(new KeyValuePair<GridPos, int>(new GridPos(ax[i], ay[i]), aw[i]));
             m = new Change { Attempt = attempt, Data = c };
@@ -682,7 +701,8 @@ namespace WordRoom.Network
             return true;
         }
 
-        static bool PlayKind(int kind) => kind == (int)RequestKind.Prepare || kind == (int)RequestKind.Enter;
+        /// <summary>The exploration requests a participant may send and a change may carry (Move is single-player only).</summary>
+        static bool PlayKind(int kind) => kind == (int)RequestKind.Prepare || kind == (int)RequestKind.Enter || kind == (int)RequestKind.Return;
 
         /// <summary>
         /// The initial world, checked against the receiver's vocabulary size (`wordCount`) — the fixed settings with
@@ -725,8 +745,11 @@ namespace WordRoom.Network
                 !Ints(a, WorldIndex.VisitOwner, setMax, out var vOwner, ref error) || !Ints(a, WorldIndex.VisitX, setMax, out var vx, ref error) ||
                 !Ints(a, WorldIndex.VisitY, setMax, out var vy, ref error) || !Ints(a, WorldIndex.VisitCount, setMax, out var vc, ref error) ||
                 !Ints(a, WorldIndex.PathOwner, pathMax, out var pOwner, ref error) || !Ints(a, WorldIndex.PathX, pathMax, out var px, ref error) ||
-                !Ints(a, WorldIndex.PathY, pathMax, out var py, ref error))
+                !Ints(a, WorldIndex.PathY, pathMax, out var py, ref error) ||
+                !Ints(a, WorldIndex.ReturnOwner, MaxReturnsPerPlayer * CoopRules.MaxPlayers, out var rOwner, ref error) ||
+                !Ints(a, WorldIndex.ReturnAt, MaxReturnsPerPlayer * CoopRules.MaxPlayers, out var rAt, ref error))
                 return false;
+            if (rOwner.Length != rAt.Length || rOwner.Any(o => o < 0 || o >= ids.Length)) return Bad("시작 방 복귀 기록", out error);
             if (rx.Length != ry.Length || rx.Length != rw.Length || prx.Length != pry.Length || dax.Length != day.Length || dax.Length != dbx.Length ||
                 dax.Length != dby.Length || tx.Length != ty.Length || posX.Length != ids.Length || posY.Length != ids.Length || moves.Length != ids.Length ||
                 vOwner.Length != vx.Length || vOwner.Length != vy.Length || vOwner.Length != vc.Length || pOwner.Length != px.Length || pOwner.Length != py.Length)
@@ -758,6 +781,8 @@ namespace WordRoom.Network
                 parts.Players[vOwner[i]].Visits.Add(new KeyValuePair<GridPos, int>(new GridPos(vx[i], vy[i]), vc[i]));
             for (var i = 0; i < pOwner.Length; i++)
                 parts.Players[pOwner[i]].Path.Add(new GridPos(px[i], py[i]));
+            for (var i = 0; i < rOwner.Length; i++)
+                parts.Players[rOwner[i]].ReturnMarks.Add(rAt[i]);          // order kept per player; Restore checks them against the path
             SessionCopy copy;
             try
             {

@@ -211,8 +211,8 @@ namespace WordRoom.World
             pitch = 0f;
             if (view != null) view.SetLocalPositionAndRotation(viewHomeSaved ? viewHomeLocalPosition : view.localPosition, Quaternion.identity);
             placed = true;
-            if (Application.isFocused && InputAllowed) SetCursorLock(true);
-            else if (inputBlocked) relockOnResume = true;                // a menu is open: lock when it closes
+            if (Application.isFocused && InputAllowed && !mapMode) SetCursorLock(true);
+            else if (inputBlocked) relockOnResume = true;                // a menu is open: lock when it closes (the map's own close relocks after it)
             failure = null;
             return true;
         }

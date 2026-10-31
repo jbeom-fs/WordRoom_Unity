@@ -125,9 +125,10 @@ namespace WordRoom.RoomDebug
 
         /// <summary>
         /// Raised once per experiment when a first-person entry into the target room is confirmed (entry accepted,
-        /// view shown, player on the arrival floor; never for door opening, Prepare, arrow-key Moves, refusals,
-        /// duplicates, cancelled or stale results), with the session's fixed time and visit count. Only when the
-        /// play clock had started.
+        /// view shown, player on the arrival floor; never for door opening, Prepare, arrow-key Moves, a return to the start
+        /// room, refusals, duplicates, cancelled or stale results), with the session's fixed time and visit count. Only
+        /// when the play clock had started. In coop: once the shown state holds the host's confirmed result — on every
+        /// participant's device, whoever reached the goal, from the goal's change or a whole state (once per game).
         /// </summary>
         public event Action<GoalResult> GoalReached;
 
@@ -136,6 +137,19 @@ namespace WordRoom.RoomDebug
 
         /// <summary>Set by a result screen that shows the goal itself: the "목표 도달" hint is then not shown. Cleared by a new experiment.</summary>
         public bool SuppressGoalHint { get; set; }
+
+        /// <summary>
+        /// The end of a 끼임방지 request of this device: true once the body stands on the start room's floor (the request
+        /// confirmed and carried out), false with why when it was refused, could not be sent, failed or could not be
+        /// carried out (then play may also be stopped with the reason). Raised once per request.
+        /// </summary>
+        public event Action<bool, string> UnstuckFinished;
+
+        bool unstuckRunning;                 // single play: this device's return request runs
+        int soloReturns;                     // single play: the local player's confirmed returns, copied with each confirmed change (the session's count)
+
+        /// <summary>This player has used its one 끼임방지 of this game (a confirmed return; the session's own count, not a UI flag).</summary>
+        public bool UnstuckUsed => coopMode ? coopView != null && (coopView.FindPlayer(localPlayer)?.Returns ?? 0) > 0 : soloReturns > 0;
 
         // Explored map for a map screen (main thread only; filled from the finished requests' worker copies).
         readonly ExploredMap exploredMap = new ExploredMap();
@@ -369,6 +383,7 @@ namespace WordRoom.RoomDebug
             SuppressGoalHint = false;
             nextRequest = 0;
             expectedRoom = GridPos.Origin;
+            soloReturns = 0;                                      // a new game: 끼임방지 can be used once again
             exploredMap.Reset(null, LocalPlayer);                 // the explored map starts over; older updates are refused
             mapResync = false;
             Raise(ExperimentStarted);
@@ -797,6 +812,140 @@ namespace WordRoom.RoomDebug
             }
         }
 
+        // ---- 끼임방지: back to the start room (an explicit Return request; never an entry, a visit or a move) -----------
+        /// <summary>
+        /// Whether this device may ask for 끼임방지 now, else why not: a placed player of a running game (after the common
+        /// start in coop) that is not stopped, with nothing of its own unanswered — single play: no request running;
+        /// coop: no door opening, entry or return of this device waiting (it is never sent twice, and a waiting request
+        /// is never cancelled or dropped for it) — and its one use of this game not spent (UnstuckUsed; the coordinator
+        /// refuses a second return anyway).
+        /// </summary>
+        public bool CanRequestUnstuck(out string why)
+        {
+            why = null;
+            if (controlled == null || controlled != player || !controlled.Placed) why = "배치된 플레이어가 없어 사용할 수 없습니다";
+            else if (halt != null) why = "진행이 정지되어 사용할 수 없습니다";
+            else if (coopMode ? coopView == null || coopWaiting : session == null) why = "게임이 시작되기 전에는 사용할 수 없습니다";
+            else if (status != "running") why = "탐색이 끝나 사용할 수 없습니다";
+            else if (UnstuckWaiting) why = "시작 방으로 돌아가는 요청을 처리하고 있습니다";
+            else if (UnstuckUsed) why = "끼임방지는 한 게임에 한 번만 사용할 수 있습니다";   // the host checks it again
+            else if (coopMode ? prepareWait != null || enterWait != null : busy) why = "문 열기나 입장 처리를 기다리는 중입니다. 확인된 뒤에 사용할 수 있습니다";
+            else if (worldView == null) why = "3D 방 표시가 없어 사용할 수 없습니다";
+            return why == null;
+        }
+
+        /// <summary>A 끼임방지 request of this device is waiting for its outcome.</summary>
+        public bool UnstuckWaiting => coopMode ? returnWait != null : unstuckRunning;
+
+        /// <summary>
+        /// 끼임방지: one Return request of this player (single play: to its own coordinator; coop: to the host). The body is
+        /// moved only after the confirmed state has this player in the start room (UnstuckFinished tells the end). False
+        /// with why when it cannot be asked now (CanRequestUnstuck) — nothing is sent then.
+        /// </summary>
+        public bool RequestUnstuck(out string why)
+        {
+            if (!CanRequestUnstuck(out why)) return false;
+            if (coopMode) SendCoop(RequestKind.Return, Direction.Up, default);  // the direction is unused for a return
+            else ReturnToStart();
+            return true;
+        }
+
+        void FinishUnstuck(bool ok, string why)
+        {
+            var handlers = UnstuckFinished;
+            if (handlers == null) return;
+            try
+            {
+                handlers(ok, why);
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+            }
+        }
+
+        /// <summary>
+        /// Single play: one Return request on the worker with the snapshot taken inside it; once confirmed the view is
+        /// shown around the start room and the body put on its floor (PlaceInStartRoom). A refusal changes nothing and is
+        /// told; a failed display or placement stops play with the reason (never told as done). Walking is locked while
+        /// it runs (the game menu's own block is separate). A stale result does nothing.
+        /// </summary>
+        async void ReturnToStart()
+        {
+            var p = controlled;
+            busy = true;
+            unstuckRunning = true;
+            p.SetMovementLocked(true);
+            var token = cts.Token;
+            var s = session;
+            var request = NewRequest(RequestKind.Return, Direction.Up);
+            var capture = CaptureNow();
+            var radius = capture.Radius;
+            string failed = null;
+            var done = false;
+            try
+            {
+                var result = await Task.Run(() => s.Submit(request, capture.Run, token), token);
+                if (this == null || token.IsCancellationRequested || s != session) return;   // stale result
+                if (!result.Accepted && !result.Duplicate)
+                {
+                    failed = $"시작 방으로 돌아갈 수 없습니다 — {result.Refusal}";
+                    if (controlled == p) p.SetMovementLocked(status != "running");
+                    return;
+                }
+                var current = await Current(result, s, capture, token);
+                if (current == null) return;
+                var captured = current.Value;
+                var snapshot = captured.View;
+                TakeConfirmed(captured);                                           // the start room is this player's room again (no visit)
+                var shown = ShowView(snapshot, out var showFailure);
+                if (shown) shownRadius = radius;
+                if (controlled != p) return;                                       // released meanwhile
+                var failure = PlaceInStartRoom(p, snapshot.Center, shown, showFailure);
+                if (failure != null)
+                {
+                    failed = $"시작 방 복귀 배치 실패 — {failure}";
+                    Halt(failed);
+                    return;
+                }
+                SetHudWords(snapshot.CurrentWord, hudTarget);
+                done = true;
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                if (this != null && s == session && !token.IsCancellationRequested)
+                {
+                    failed = "시작 방 복귀 중 오류가 났습니다(Console 확인)";
+                    Halt(failed);
+                }
+            }
+            finally
+            {
+                busy = false;
+                unstuckRunning = false;
+                if (this != null && (done || failed != null)) FinishUnstuck(done, failed);
+            }
+        }
+
+        /// <summary>
+        /// After the view around the start room is shown: the body on the start room's floor center (the safe spot, as at
+        /// the start), facing 상, no fall; walking as the status allows. Null when placed, else why (nothing more done).
+        /// </summary>
+        string PlaceInStartRoom(FirstPersonPlayer p, GridPos shownCenter, bool shown, string showFailure)
+        {
+            if (!shown) return showFailure ?? "시작 방 주변을 3D로 표시하지 못했습니다";
+            if (shownCenter != GridPos.Origin) return $"표시 중심 {shownCenter}이 시작 방이 아닙니다";
+            if (!worldView.TryGetShownRoom(GridPos.Origin, out var room)) return "시작 방이 3D로 표시되지 않았습니다";
+            if (!p.PlaceAt(room, out var failure)) return failure;
+            lastPosition = p.transform.position;
+            p.SetMovementLocked(status != "running" || coopWaiting);
+            return null;
+        }
+
         /// <summary>
         /// Physical and logical position can no longer be trusted to match: the player stops completely (no
         /// walking, falling or door use; Escape still releases the cursor) until a new experiment.
@@ -854,6 +1003,7 @@ namespace WordRoom.RoomDebug
             ApplyMap(c.Map);
             status = c.Status;
             expectedRoom = c.Room;
+            soloReturns = c.Returns;
             if (c.Log != null) Debug.Log(c.Log);
         }
 
@@ -869,14 +1019,16 @@ namespace WordRoom.RoomDebug
             public readonly string Log;
             public readonly string Status;
             public readonly GridPos Room;
+            public readonly int Returns;     // the local player's confirmed returns to the start room (끼임방지)
 
-            public Captured(RoomViewSnapshot view, MapUpdate map, string log, string status, GridPos room)
+            public Captured(RoomViewSnapshot view, MapUpdate map, string log, string status, GridPos room, int returns)
             {
                 View = view;
                 Map = map;
                 Log = log;
                 Status = status;
                 Room = room;
+                Returns = returns;
             }
         }
 
@@ -901,12 +1053,12 @@ namespace WordRoom.RoomDebug
             /// <summary>Worker, inside the coordinator's lock right after the change: every copy belongs to the revision of `u`.</summary>
             public Captured Run(SessionReader r, GenerationUpdate u) =>
                 new Captured(view ? RoomViewSnapshot.Capture(r, LocalPlayer, data.GetWord, Radius) : null, map.Capture(r, u, data.GetWord),
-                    Describe(r, u, data, verbose), r.Status, r.PlayerPosition(LocalPlayer));
+                    Describe(r, u, data, verbose), r.Status, r.PlayerPosition(LocalPlayer), r.PlayerReturns(LocalPlayer));
 
             /// <summary>Worker, inside a Read: the current state (no change of its own), the map as a full copy of this revision.</summary>
             public Captured Latest(SessionReader r) =>
                 new Captured(view ? RoomViewSnapshot.Capture(r, LocalPlayer, data.GetWord, Radius) : null, map.CaptureFull(r, data.GetWord),
-                    null, r.Status, r.PlayerPosition(LocalPlayer));
+                    null, r.Status, r.PlayerPosition(LocalPlayer), r.PlayerReturns(LocalPlayer));
         }
 
         /// <summary>
@@ -1033,7 +1185,7 @@ namespace WordRoom.RoomDebug
                 Debug.LogWarning("[결과] 조작 시작 시각이 기록되지 않아 목표 도달 결과를 만들지 않았습니다(안내만 표시).");
                 return;
             }
-            var result = new GoalResult(confirmed, LocalPlayer);
+            var result = new GoalResult(confirmed, localPlayer);              // this device's player ("local" in single play)
             Debug.Log($"[결과] 목표 도달 — 소요 {result.Seconds:0.0}초, 방문 방 {result.VisitedRooms}개(팀 {confirmed.TeamVisitedRooms}개)");
             var handlers = GoalReached;
             if (handlers == null) return;                                      // development scene: no result screen
@@ -1158,6 +1310,8 @@ namespace WordRoom.RoomDebug
         double coopWaitNotice = 10;          // a request unanswered this long is told as delayed (never cancelled)
         CoopPending prepareWait;             // this device's door opening waiting for the host; null = none
         CoopPending enterWait;               // this device's entry waiting for the host (at most one); null = none
+        CoopPending returnWait;              // this device's return to the start room (끼임방지) waiting for the host; null = none
+        int placedReturns;                   // this player's confirmed returns already carried out by putting the body in the start room
         string coopShownWord;                // current word of the last shown copy (this player's confirmed room)
         string coopEndText;                  // what the end of the session looks like here; null while running
         string coopNote;                     // a short local message (a refusal), shown until coopNoteUntil
@@ -1199,7 +1353,7 @@ namespace WordRoom.RoomDebug
         public bool TryGetCoopUnanswered(out long requestId, out double sentAt)
         {
             CoopPending p = null;
-            foreach (var w in new[] { prepareWait, enterWait })
+            foreach (var w in new[] { prepareWait, enterWait, returnWait })
                 if (w != null && w.Outcome == null && (p == null || w.RequestId < p.RequestId)) p = w;
             requestId = p?.RequestId ?? 0;
             sentAt = p?.SentAt ?? 0;
@@ -1207,7 +1361,10 @@ namespace WordRoom.RoomDebug
         }
 
         /// <summary>The revision this device's waiting requests need the shown copy to reach (their known outcomes); 0 when none.</summary>
-        public long CoopAwaitedRevision => Math.Max(Awaited(prepareWait), Awaited(enterWait));
+        public long CoopAwaitedRevision => Math.Max(Math.Max(Awaited(prepareWait), Awaited(enterWait)), Awaited(returnWait));
+
+        /// <summary>The coop game's one result is confirmed in the shown state (the goal was reached by anyone).</summary>
+        public bool CoopResultConfirmed => coopMode && coopView != null && coopView.Status == "success" && coopView.Result != null;
 
         static long Awaited(CoopPending p) => p != null && p.Outcome != null ? p.Target : 0;
 
@@ -1278,7 +1435,8 @@ namespace WordRoom.RoomDebug
             coopMode = true;
             coopView = null;
             coopWaiting = false;
-            prepareWait = enterWait = null;
+            prepareWait = enterWait = returnWait = null;
+            placedReturns = 0;
             coopShownWord = coopEndText = coopNote = null;
             coopPlacement = 0;
             if (remotePlayers != null) remotePlayers.Clear();            // nothing of an earlier game is shown again
@@ -1403,6 +1561,7 @@ namespace WordRoom.RoomDebug
                 return false;
             }
             coopWaiting = true;
+            placedReturns = copy.FindPlayer(localPlayer)?.Returns ?? 0;    // returns before this placement are already where it stands
             coopPlacement++;                                               // placed, not walked: others never glide to here
             controlled.SetMovementLocked(true);                            // the coop gate: look yes, walking and doors not yet
             lastPosition = controlled.transform.position;
@@ -1462,11 +1621,13 @@ namespace WordRoom.RoomDebug
         void UpdateCoopPlay()
         {
             var now = Time.realtimeSinceStartupAsDouble;
-            foreach (var w in new[] { prepareWait, enterWait })
+            foreach (var w in new[] { prepareWait, enterWait, returnWait })
                 if (w != null && !w.Delayed && now - w.SentAt >= coopWaitNotice) w.Delayed = true;
-            var text = coopHint ?? coopEndText;
+            var text = coopHint ?? (status == "success" && SuppressGoalHint ? null : coopEndText);   // a result screen shows the goal instead
             if (text == null && coopNote != null && now < coopNoteUntil) text = coopNote;
-            if (text == null && enterWait != null && enterWait.Delayed)
+            if (text == null && returnWait != null && returnWait.Delayed)
+                text = "호스트의 시작 방 복귀 확인이 늦어지고 있습니다. 확인되면 시작 방으로 옮겨집니다(Esc로 메인 메뉴에 나갈 수도 있습니다)";
+            else if (text == null && enterWait != null && enterWait.Delayed)
                 text = "호스트의 입장 확인이 늦어지고 있습니다. 다음 방으로는 확인 뒤에 갈 수 있습니다(Esc로 메인 메뉴에 나갈 수도 있습니다)";
             else if (text == null && prepareWait != null && prepareWait.Delayed)
                 text = "호스트의 문 열기 확인이 늦어지고 있습니다. 확인 뒤에 그 문으로 지나갈 수 있습니다(Esc로 메인 메뉴에 나갈 수도 있습니다)";
@@ -1483,7 +1644,7 @@ namespace WordRoom.RoomDebug
         /// room — the opening's ExpectedFrom — is about to change).
         /// </summary>
         bool CanUseCoopDoors =>
-            controlled != null && halt == null && !coopWaiting && prepareWait == null && enterWait == null && status == "running" && coopView != null && worldView != null && controlled.CanInteract;
+            controlled != null && halt == null && !coopWaiting && prepareWait == null && enterWait == null && returnWait == null && status == "running" && coopView != null && worldView != null && controlled.CanInteract;
 
         /// <summary>
         /// After every Update in coop: one entry at most at a time — when this player stands 0.15m or more past a boundary of
@@ -1493,7 +1654,7 @@ namespace WordRoom.RoomDebug
         /// </summary>
         void LateUpdateCoop()
         {
-            if (controlled == null || halt != null || coopWaiting || enterWait != null || status != "running" || coopView == null || worldView == null) return;
+            if (controlled == null || halt != null || coopWaiting || enterWait != null || returnWait != null || status != "running" || coopView == null || worldView == null) return;   // a waiting return: its outcome decides the room first
             if (controlled != player || !controlled.Placed) return;              // TrackPlayer releases it next frame
             if (worldView.TryGetPassedSide(controlled.transform.position, true, out var side)) SendCoop(RequestKind.Enter, side, default);
         }
@@ -1509,7 +1670,7 @@ namespace WordRoom.RoomDebug
             var from = coopView.PlayerPosition(localPlayer);
             var p = new CoopPending
             {
-                RequestId = ++nextRequest, Kind = kind, Side = side, From = from, To = from.Add(Directions.Offset(side)), Door = door,
+                RequestId = ++nextRequest, Kind = kind, Side = side, From = from, To = kind == RequestKind.Return ? GridPos.Origin : from.Add(Directions.Offset(side)), Door = door,
                 SentAt = Time.realtimeSinceStartupAsDouble,
             };
             if (kind == RequestKind.Enter)
@@ -1517,6 +1678,7 @@ namespace WordRoom.RoomDebug
                 enterWait = p;
                 worldView.LimitPassage(RoomConnection.Between(p.From, p.To));   // the two rooms only, until the outcome
             }
+            else if (kind == RequestKind.Return) returnWait = p;            // the body is moved only after the host confirms it
             else prepareWait = p;
             coopNote = null;
             SetHint(null);
@@ -1542,7 +1704,8 @@ namespace WordRoom.RoomDebug
         /// </summary>
         public void ApplyCoopReply(long requestId, RequestOutcome outcome, long revision, string reason)
         {
-            var p = prepareWait != null && prepareWait.RequestId == requestId ? prepareWait : enterWait != null && enterWait.RequestId == requestId ? enterWait : null;
+            var p = prepareWait != null && prepareWait.RequestId == requestId ? prepareWait : enterWait != null && enterWait.RequestId == requestId ? enterWait
+                : returnWait != null && returnWait.RequestId == requestId ? returnWait : null;
             if (!coopMode || p == null || p.Outcome != null || outcome == RequestOutcome.Pending) return;
             p.Outcome = outcome;
             p.Target = outcome == RequestOutcome.Accepted || outcome == RequestOutcome.Failed ? revision : 0;
@@ -1556,6 +1719,7 @@ namespace WordRoom.RoomDebug
         {
             prepareWait = Complete(prepareWait);
             enterWait = Complete(enterWait);
+            returnWait = Complete(returnWait);
         }
 
         /// <summary>
@@ -1573,6 +1737,19 @@ namespace WordRoom.RoomDebug
             if (p == null || coopView == null || p.Outcome == null) return p;
             var outcome = p.Outcome.Value;
             if ((outcome == RequestOutcome.Accepted || outcome == RequestOutcome.Failed) && coopView.Revision < p.Target) return p;   // that revision is not shown yet
+            if (p.Kind == RequestKind.Return)
+            {
+                // Accepted: the shown state has reached its revision, so AdoptCoopState has already put the body in the start
+                // room (or stopped play saying why). Otherwise nothing moved here; the reason is told.
+                if (outcome == RequestOutcome.Accepted) FinishUnstuck(halt == null && controlled != null, halt ?? "배치된 플레이어가 없어 시작 방으로 옮기지 못했습니다");
+                else
+                {
+                    Debug.Log($"[협동] 시작 방 복귀 요청 {p.RequestId} {(outcome == RequestOutcome.Failed ? "처리 오류" : "거절")}: {p.Reason}");
+                    ShowNote($"시작 방으로 돌아갈 수 없습니다 — {p.Reason}");
+                    FinishUnstuck(false, outcome == RequestOutcome.Failed ? $"{p.Reason}. 호스트의 현재 상태로 맞췄습니다" : p.Reason);
+                }
+                return null;
+            }
             if (p.Kind == RequestKind.Enter && worldView != null) worldView.LimitPassage(null);
             if (controlled == null || halt != null) return null;
             if (outcome != RequestOutcome.Accepted)
@@ -1645,7 +1822,7 @@ namespace WordRoom.RoomDebug
             }
             SyncCoopMap(c, next);
             AdoptCoopState(next);
-            foreach (var w in new[] { prepareWait, enterWait })
+            foreach (var w in new[] { prepareWait, enterWait, returnWait })
                 if (w != null && w.Outcome == null && c.PlayerId == localPlayer && c.RequestId == w.RequestId)
                 {
                     w.Outcome = RequestOutcome.Accepted;                           // this request's own confirmed change
@@ -1674,7 +1851,8 @@ namespace WordRoom.RoomDebug
             if (copy.Revision <= coopView.Revision) return true;                  // nothing newer
             var mine = coopView.PlayerPosition(localPlayer);
             var entering = enterWait != null && theirs.Position == enterWait.To;
-            if (theirs.Position != mine && !entering)
+            var returned = theirs.Returns > coopView.FindPlayer(localPlayer).Returns && theirs.Position == GridPos.Origin;   // a confirmed return this device missed
+            if (theirs.Position != mine && !entering && !returned)
             {
                 failure = $"내 확정 위치가 {mine}에서 {theirs.Position}로 설명 없이 바뀌었습니다";
                 return false;
@@ -1685,7 +1863,12 @@ namespace WordRoom.RoomDebug
             return true;
         }
 
-        /// <summary>The copy becomes the shown state: status, the end text, the 3D view around this player's confirmed room.</summary>
+        /// <summary>
+        /// The copy becomes the shown state: status, the end text, the 3D view around this player's confirmed room, a
+        /// confirmed return of this player carried out (CarryOutReturn), and — once per game, whoever reached the goal, from
+        /// a change or a whole state alike — the session's one confirmed result handed to the result screen (ReportGoal;
+        /// a repeated or older state never reports again). Nothing here stops the coop flow's acks or recovery.
+        /// </summary>
         void AdoptCoopState(SessionCopy next)
         {
             coopView = next;
@@ -1695,8 +1878,33 @@ namespace WordRoom.RoomDebug
                 coopEndText = CoopEndText(next);
                 Debug.Log($"[협동] 탐색 종료 — {coopEndText.Replace("\n", " / ")}");
             }
-            if (halt != null || controlled == null) return;
-            ShowCoopState();
+            if (halt == null && controlled != null)
+            {
+                ShowCoopState();
+                if (halt == null) CarryOutReturn();
+            }
+            if (next.Status == "success" && next.Result != null) ReportGoal(next.Result);   // goalReported keeps it to once
+        }
+
+        /// <summary>
+        /// This player's confirmed returns beyond those already carried out (from its own change, or a whole state after a
+        /// missed one): the body goes on the start room's floor once — the view is already centered there — and the others
+        /// see a placement (no glide across walls). A repeated or older state carries nothing out again. A failure stops play.
+        /// </summary>
+        void CarryOutReturn()
+        {
+            var me = coopView.FindPlayer(localPlayer);
+            if (me == null || me.Returns <= placedReturns) return;
+            placedReturns = me.Returns;                                    // once per confirmed return, whatever happens below
+            if (me.Position != GridPos.Origin) return;                    // entered again since (cannot be this device's own): nothing to put back
+            var failure = PlaceInStartRoom(controlled, me.Position, true, null);   // ShowCoopState has just shown the view around it
+            if (failure != null)
+            {
+                Halt($"시작 방 복귀 배치 실패 — {failure}");
+                return;
+            }
+            coopPlacement++;                                               // placed, not walked: others never glide to here
+            SetHudWords(coopShownWord, hudTarget);
         }
 
         /// <summary>
@@ -1916,6 +2124,7 @@ namespace WordRoom.RoomDebug
                 case "start": return "시작";
                 case "prepare": return $"문 열기 주변 준비 {step} (입장 전: 이동·방문 변화 없음)";
                 case "enter": return $"입장 {step}{visit} · 주변 생성 없음(문을 열 때 준비됨)";
+                case "return": return $"끼임방지: {u.From}에서 시작 방으로 복귀 {u.Returns}회째 (이동·방문·경로 집계 없음, 주변 생성 없음)";
                 default: return $"이동 {step}{visit}";
             }
         }

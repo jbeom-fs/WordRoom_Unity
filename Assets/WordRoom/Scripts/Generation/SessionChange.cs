@@ -23,7 +23,8 @@ namespace WordRoom.Generation
     /// One confirmed exploration change of a session as plain values — what a device without a coordinator needs to
     /// bring its SessionCopy from Revision − 1 to Revision (SessionCopy.Apply): who asked (PlayerId, RequestId), the
     /// door opening with the rooms its fill committed and the room it prepared (Prepare), or the requester's entry
-    /// with its moves and the team's first visit (Enter), the session status after it and the one result when this
+    /// with its moves and the team's first visit (Enter), the requester's return to the start room with its return count
+    /// (Return: To is the origin, nothing else changes), the session status after it and the one result when this
     /// change reached the goal. Made by the host from the coordinator's confirmed update (FromUpdate); no generation
     /// records, relations, vectors or recent words.
     /// </summary>
@@ -33,7 +34,7 @@ namespace WordRoom.Generation
         public long Revision;
         public string PlayerId;
         public long RequestId;
-        /// <summary>Prepare or Enter (Move is a single-player debug request and never a coop change).</summary>
+        /// <summary>Prepare, Enter or Return (Move is a single-player debug request and never a coop change).</summary>
         public RequestKind Kind;
         public GridPos From;
         public GridPos To;
@@ -45,6 +46,8 @@ namespace WordRoom.Generation
         public bool TeamFirstVisit;
         /// <summary>The requester's moves after this change.</summary>
         public int Moves;
+        /// <summary>The requester's returns to the start room after this change (one more than before for a Return, unchanged otherwise).</summary>
+        public int Returns;
         public string Status;
         /// <summary>The session result confirmed by this change (the goal entry); null otherwise.</summary>
         public SessionResult Result;
@@ -56,12 +59,13 @@ namespace WordRoom.Generation
             RequestKind kind;
             if (u.Kind == "prepare") kind = RequestKind.Prepare;
             else if (u.Kind == "enter") kind = RequestKind.Enter;
+            else if (u.Kind == "return") kind = RequestKind.Return;
             else throw new ArgumentException($"협동 변경으로 보낼 수 없는 종류입니다({u.Kind}).");
             var c = new SessionChange
             {
                 SessionId = u.SessionId, Revision = u.Revision, PlayerId = u.PlayerId, RequestId = u.RequestId, Kind = kind,
                 From = u.From, To = u.To, DoorOpened = u.OpenedDoor.HasValue, TeamFirstVisit = u.TeamFirstVisit, Moves = u.Moves,
-                Status = u.Status, Result = u.Result,
+                Returns = u.Returns, Status = u.Status, Result = u.Result,
             };
             foreach (var r in u.Added) c.Added.Add(new KeyValuePair<GridPos, int>(r.Position, r.Word));
             return c;

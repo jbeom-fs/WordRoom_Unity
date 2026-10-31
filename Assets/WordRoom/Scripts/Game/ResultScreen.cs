@@ -4,6 +4,7 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+using WordRoom.Network;
 using WordRoom.RoomDebug;
 using WordRoom.World;
 
@@ -24,6 +25,13 @@ namespace WordRoom.Game
     /// and the 메인 메뉴 button is active and interactable are the menu, the hint and the input taken. Otherwise — or
     /// on an exception on the way — every step done is undone, the error is reported once, and the "목표 도달" hint
     /// and the game menu's way back to the main menu stay. A broken Canvas or button is never switched on by force.
+    /// Coop (the game is a coop game): the same screen with its coop part (CoopResultView, optional) instead of the
+    /// single-play rows — 팀 목표 달성, the common time, the team's and every participant's distinct visited rooms, all from
+    /// the session's one confirmed result, the names taken once when shown. It is shown on every participant's device
+    /// once (RoomGenerationDebug raises GoalReached once per game) and stays — also when the connection ends or others
+    /// leave — until this player's own 메인 메뉴, which leaves the coop game through CoopSession.LeaveGame as the game
+    /// menu does. Without a usable coop part a coop result is not shown (reported once; the end hint and Escape → 메인
+    /// 메뉴 stay); the single-play result never needs it.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class ResultScreen : MonoBehaviour
@@ -45,6 +53,8 @@ namespace WordRoom.Game
         [SerializeField] TextMeshProUGUI timeText;
         [SerializeField] TextMeshProUGUI visitedText;
         [SerializeField] Button mainMenuButton;
+        [Tooltip("협동 결과 부분(선택). 비어 있으면 단독 결과만 표시하고, 협동 결과는 화면 안내로 남습니다.")]
+        [SerializeField] CoopResultView coopResult;
 
         readonly List<ButtonBinding> bindings = new List<ButtonBinding>();
         Action<GoalResult> onGoal;
@@ -143,6 +153,16 @@ namespace WordRoom.Game
                 ReportUnusable($"참조가 비어 있음: {missing}");
                 return;
             }
+            var coop = game.IsCoop;
+            if (coop)
+            {
+                var parts = coopResult == null ? "coopResult(비어 있음)" : coopResult.MissingParts();
+                if (parts != null)
+                {
+                    ReportUnusable($"협동 결과 부품이 없거나 빠짐: {parts}. WordRoom/끼임방지·협동 결과 구성 메뉴로 보완하세요");
+                    return;
+                }
+            }
             var displayWasActive = display.activeSelf;
             var pauseTaken = false;
             var mapTaken = false;
@@ -152,8 +172,20 @@ namespace WordRoom.Game
             hintWasSuppressed = game.SuppressGoalHint;
             try
             {
-                timeText.text = FormatTime(result.Seconds);
-                visitedText.text = $"{result.VisitedRooms}개";
+                if (coop)
+                {
+                    if (!coopResult.ShowCoop(result.Session, result.PlayerId, ParticipantName, out var failure))
+                    {
+                        ReportUnusable(failure);
+                        return;
+                    }
+                }
+                else
+                {
+                    timeText.text = FormatTime(result.Seconds);
+                    visitedText.text = $"{result.VisitedRooms}개";
+                    if (coopResult != null) coopResult.ShowSolo();
+                }
                 if (!displayWasActive) display.SetActive(true);
                 var reason = UnusableReason();
                 if (reason != null)
@@ -220,13 +252,30 @@ namespace WordRoom.Game
             if (blocked != null) blocked.SetInputBlocked(true);
         }
 
-        /// <summary>Once: loading the main menu destroys the session (map, doors, running work); preferences stay.</summary>
+        /// <summary>
+        /// Once: loading the main menu destroys the session (map, doors, running work); preferences stay. In a coop game
+        /// this is this player's own leave, as from the game menu: the coop room is left (the connection ended only when the
+        /// coop session owns it); nobody else is moved.
+        /// </summary>
         void ToMainMenu()
         {
             if (leaving) return;
             leaving = true;
             mainMenuButton.interactable = false;
+            var coop = CoopSession.Current;
+            if (coop != null) coop.LeaveGame();
             SceneManager.LoadScene(mainMenuScene);
+        }
+
+        /// <summary>A participant's display name now (the room's nickname or the default name), or its default name when the coop session is gone.</summary>
+        static string ParticipantName(string playerId)
+        {
+            var s = CoopSession.Current;
+            var name = s != null ? s.ParticipantName(playerId) : null;
+            if (!string.IsNullOrEmpty(name) && name != playerId) return name;
+            const string prefix = "actor-";
+            return playerId != null && playerId.StartsWith(prefix, StringComparison.Ordinal) && int.TryParse(playerId.Substring(prefix.Length), out var actor)
+                ? CoopRules.DefaultParticipantName(actor) : playerId;
         }
 
         /// <summary>Whole seconds (cut, never rounded up): MM:SS below an hour, else HH:MM:SS.</summary>

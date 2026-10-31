@@ -123,6 +123,7 @@ namespace WordRoom.Generation
         public GridPos PlayerPosition(string playerId) => Player(playerId).Position;
         public int PlayerMoves(string playerId) => Player(playerId).Moves;
         public int PlayerUniqueVisited(string playerId) => Player(playerId).UniqueVisited;
+        public int PlayerReturns(string playerId) => Player(playerId).Returns;
         public int PlayerVisitCount(string playerId, GridPos p) => Player(playerId).VisitCount(p);
 
         /// <summary>Guidance strength new rooms would get now from a request of this player.</summary>
@@ -184,7 +185,11 @@ namespace WordRoom.Generation
         public int UniqueVisited => Visits.Count;
         /// <summary>Visit count per coordinate, in coordinate order.</summary>
         public IReadOnlyList<KeyValuePair<GridPos, int>> Visits { get; }
+        /// <summary>The entries' path (returns are not in it; see ReturnMarks).</summary>
         public IReadOnlyList<GridPos> Path { get; }
+        /// <summary>Path length at each return to the start room (끼임방지), oldest first.</summary>
+        public IReadOnlyList<int> ReturnMarks { get; }
+        public int Returns => ReturnMarks.Count;
 
         internal PlayerCopy(PlayerState p)
         {
@@ -193,6 +198,7 @@ namespace WordRoom.Generation
             Moves = p.Moves;
             Visits = Array.AsReadOnly(p.Visits.OrderBy(kv => kv.Key).ToArray());
             Path = Array.AsReadOnly(p.Path.ToArray());
+            ReturnMarks = Array.AsReadOnly(p.ReturnMarks.ToArray());
         }
 
         internal PlayerCopy(SessionCopyParts.Player p)
@@ -202,6 +208,7 @@ namespace WordRoom.Generation
             Moves = p.Moves;
             Visits = Array.AsReadOnly(p.Visits.OrderBy(kv => kv.Key).ToArray());
             Path = Array.AsReadOnly(p.Path.ToArray());
+            ReturnMarks = Array.AsReadOnly((p.ReturnMarks ?? new List<int>()).ToArray());
         }
     }
 
@@ -218,6 +225,8 @@ namespace WordRoom.Generation
             public int Moves;
             public List<KeyValuePair<GridPos, int>> Visits = new List<KeyValuePair<GridPos, int>>();
             public List<GridPos> Path = new List<GridPos>();
+            /// <summary>Path length at each return to the start room, oldest first (empty = never returned).</summary>
+            public List<int> ReturnMarks = new List<int>();
         }
 
         public string SessionId;
@@ -331,11 +340,13 @@ namespace WordRoom.Generation
         /// <summary>
         /// A new copy one revision later: `c` (the host's confirmed change of revision Revision + 1) applied to this one,
         /// then checked as a whole like Restore. Checks the change itself against this state the way the coordinator
-        /// confirmed it: same session, the next revision, a running session, a registered requester standing in From,
-        /// To adjacent and existing; Prepare — rooms added only on empty coordinates next to To, the door stored Open
-        /// exactly when it was closed, To prepared, nobody moved; Enter — no rooms added, the door Open and To prepared,
-        /// the requester's moves one more and the team's first visit as reported. Throws ArgumentException with the
-        /// reason (nothing applied); this copy never changes.
+        /// confirmed it: same session, the next revision, a running session, a registered requester standing in From;
+        /// Prepare and Enter — To adjacent and existing; Prepare — rooms added only on empty coordinates next to To, the
+        /// door stored Open exactly when it was closed, To prepared, nobody moved; Enter — no rooms added, the door Open
+        /// and To prepared, the requester's moves one more and the team's first visit as reported; Return — To the start
+        /// room, nothing added or opened, no move, visit or status change, the requester's returns one more (its return
+        /// recorded at its path length, the path itself unchanged). Throws ArgumentException with the reason (nothing
+        /// applied); this copy never changes.
         /// </summary>
         public SessionCopy Apply(SessionChange c)
         {
@@ -345,14 +356,25 @@ namespace WordRoom.Generation
             if (Status != "running") throw new ArgumentException($"끝난 세션의 변경입니다({Status}).");
             var player = FindPlayer(c.PlayerId) ?? throw new ArgumentException($"등록되지 않은 플레이어의 변경입니다({c.PlayerId}).");
             if (c.From != player.Position) throw new ArgumentException($"{c.PlayerId}의 확정 위치 {player.Position}가 변경의 출발 {c.From}와 다릅니다.");
-            if (GridPos.Distance(c.From, c.To) != 1 || !HasRoom(c.To)) throw new ArgumentException($"{c.From}→{c.To}는 인접한 기존 방이 아닙니다.");
             if (string.IsNullOrEmpty(c.Status)) throw new ArgumentException("변경의 세션 상태가 비어 있습니다.");
-            var id = RoomConnection.Between(c.From, c.To);
             var parts = ToParts();
             parts.Revision = c.Revision;
             parts.Status = c.Status;
             parts.Result = c.Result ?? Result;
             var p = parts.Players.First(x => x.Id == c.PlayerId);
+            if (c.Kind == RequestKind.Return)
+            {
+                if (c.To != GridPos.Origin || c.Added.Count > 0 || c.DoorOpened || c.TeamFirstVisit || c.Result != null)
+                    throw new ArgumentException("시작 방 복귀 변경에 다른 목적지·방 생성·문 열기·방문·결과가 있습니다.");
+                if (c.Moves != player.Moves || c.Status != Status) throw new ArgumentException("시작 방 복귀 변경이 이동 수나 세션 상태를 바꿉니다.");
+                if (c.Returns != player.Returns + 1) throw new ArgumentException($"{c.PlayerId}의 복귀 횟수가 이어지지 않습니다(보유 {player.Returns}, 받은 {c.Returns}).");
+                p.Position = GridPos.Origin;
+                p.ReturnMarks.Add(p.Path.Count);                          // where in the explored path it happened; the path stays
+                return Restore(parts);
+            }
+            if (GridPos.Distance(c.From, c.To) != 1 || !HasRoom(c.To)) throw new ArgumentException($"{c.From}→{c.To}는 인접한 기존 방이 아닙니다.");
+            if (c.Returns != player.Returns) throw new ArgumentException($"{c.PlayerId}의 복귀 횟수가 맞지 않습니다(보유 {player.Returns}, 받은 {c.Returns}).");
+            var id = RoomConnection.Between(c.From, c.To);
             switch (c.Kind)
             {
                 case RequestKind.Prepare:
@@ -421,6 +443,7 @@ namespace WordRoom.Generation
                 var copy = new SessionCopyParts.Player { Id = p.Id, Position = p.Position, Moves = p.Moves };
                 copy.Visits.AddRange(p.Visits);
                 copy.Path.AddRange(p.Path);
+                copy.ReturnMarks.AddRange(p.ReturnMarks);
                 parts.Players.Add(copy);
             }
             return parts;
@@ -431,7 +454,8 @@ namespace WordRoom.Generation
         /// A copy made from `parts` after checking that they describe one consistent state: the start room at the
         /// origin with the start word, no coordinate twice, prepared / team-visited / door coordinates on existing rooms
         /// (doors between adjacent existing rooms), unique players standing in existing rooms they visited, paths ending
-        /// there, and every personal visit inside the team's. Throws ArgumentException with the reason otherwise.
+        /// there — or, when nothing was entered since the last return mark, the player in the start room — return marks
+        /// non-decreasing within the path length, and every personal visit inside the team's. Throws ArgumentException with the reason otherwise.
         /// Recent words, unfilled records and generation records are not part of a restored copy; a result is kept only
         /// with the status "success" and a revision not after the copy's.
         /// </summary>
@@ -476,8 +500,15 @@ namespace WordRoom.Generation
                     if (!teamSet.Contains(v.Key)) throw new ArgumentException($"{p.Id}의 방문 {v.Key}가 팀 방문에 없습니다.");
                 }
                 if (!visited.Contains(p.Position)) throw new ArgumentException($"{p.Id}의 현재 방이 방문 기록에 없습니다.");
-                if (p.Path == null || p.Path.Count == 0 || p.Path[p.Path.Count - 1] != p.Position || p.Path.Any(q => !rooms.ContainsKey(q)))
+                if (p.Path == null || p.Path.Count == 0 || p.Path.Any(q => !rooms.ContainsKey(q)))
                     throw new ArgumentException($"{p.Id}의 경로가 올바르지 않습니다.");
+                var marks = p.ReturnMarks ?? new List<int>();
+                for (var i = 0; i < marks.Count; i++)
+                    if (marks[i] < 1 || marks[i] > p.Path.Count || (i > 0 && marks[i] < marks[i - 1]))
+                        throw new ArgumentException($"{p.Id}의 시작 방 복귀 기록이 올바르지 않습니다.");
+                var returnedLast = marks.Count > 0 && marks[marks.Count - 1] == p.Path.Count;   // no entry since the last return
+                if (p.Position != (returnedLast ? GridPos.Origin : p.Path[p.Path.Count - 1]))
+                    throw new ArgumentException($"{p.Id}의 위치 {p.Position}가 경로·복귀 기록과 맞지 않습니다.");
                 players.Add(new PlayerCopy(p));
             }
             if (parts.Result != null && (parts.Status != "success" || parts.Result.Revision > parts.Revision || !ids.Contains(parts.Result.ReachedBy)))

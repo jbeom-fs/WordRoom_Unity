@@ -46,6 +46,7 @@ namespace WordRoom.Game
         bool placedOk;
         bool started;
         bool ended;
+        bool finishMarked;                  // the confirmed result was reported to the session (MarkFinished)
         long initialRevision;               // revision of the initial world every placed device showed
 
         // host: requests in arrival order, their recorded outcomes, and how far each participant has applied the state
@@ -194,6 +195,12 @@ namespace WordRoom.Game
             if (placedOk && !started) TryBegin();
             if (!placedOk) return;
             TakePlayMessages();
+            if (!finishMarked && game.CoopResultConfirmed)
+            {
+                finishMarked = true;
+                s.MarkFinished();                                           // the result stays: a later host change no longer loads the waiting room
+            }
+            if (s.HostChangeStopPending) s.ResolveHostChange(game.CoopResultConfirmed);   // every message received before the host change was just taken (and checked)
             var now = Time.realtimeSinceStartupAsDouble;
             TakePoses(now);                                                 // display only: apart from every logical step below
             SendPose(now);

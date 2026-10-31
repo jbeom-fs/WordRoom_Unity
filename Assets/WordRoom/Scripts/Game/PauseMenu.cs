@@ -24,6 +24,12 @@ namespace WordRoom.Game
     /// The menu is the scene's GameMenu Canvas (a prefab instance saved in the scene, inactive while closed); this
     /// component only switches it and handles its clicks, with listeners added once in Awake. When its references
     /// are incomplete it reports once and leaves Escape to the player (cursor release), so play is never stuck.
+    /// 끼임방지 (optional button, "끼임방지 (1회)"): asks RoomGenerationDebug for one return to the start room. The button
+    /// can be pressed only when the game allows it (CanRequestUnstuck: placed, running, nothing of this device waiting,
+    /// its one use of this game not spent) and stays visible but disabled otherwise — also after the use. The menu closes
+    /// by itself once the body stands in the start room (UnstuckFinished true); input then resumes as after 계속. A
+    /// failure is logged (a coop refusal is also told on screen by the game). Without the button the rest of the menu is
+    /// unchanged (reported once).
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class PauseMenu : MonoBehaviour
@@ -47,6 +53,10 @@ namespace WordRoom.Game
         [Tooltip("지도(선택). 열려 있으면 Esc가 지도만 닫고 메뉴는 열지 않습니다.")]
         [SerializeField] MapScreen map;
 
+        [Header("끼임방지 (선택)")]
+        [Tooltip("시작 방으로 돌아가는 끼임방지 버튼(같은 메뉴 목록 안, 게임당 1회)")]
+        [SerializeField] Button unstuckButton;
+
 #pragma warning disable CS0414, CS0649   // read and written only by the Editor setup (SerializedObject), never at runtime
         // Value saved by the former runtime-built menu (field "font"), moved once onto this scene's canvas instance.
         [SerializeField, HideInInspector, FormerlySerializedAs("font")] TMP_FontAsset legacyFont = null;
@@ -59,6 +69,8 @@ namespace WordRoom.Game
         bool ready;
         bool open;
         bool leaving;
+        bool unstuckUsable;
+        System.Action<bool, string> onUnstuck;
 
         public bool IsOpen => open;
 
@@ -79,6 +91,7 @@ namespace WordRoom.Game
             ArchiveUi.Bind(bindings, mainMenuButton, ToMainMenu);
             ArchiveUi.Bind(bindings, quitButton, ArchiveUi.QuitGame);
             settings.Closed += ShowList;
+            InitializeUnstuck();
             if (menuRoot.activeSelf) menuRoot.SetActive(false);              // closed until Escape
             TakeEscape();
         }
@@ -103,6 +116,49 @@ namespace WordRoom.Game
         {
             ArchiveUi.Unbind(bindings);
             if (ready && settings != null) settings.Closed -= ShowList;
+            if (onUnstuck != null && game != null) game.UnstuckFinished -= onUnstuck;
+        }
+
+        /// <summary>The optional 끼임방지 button (reported once when missing); listeners added once.</summary>
+        void InitializeUnstuck()
+        {
+            unstuckUsable = unstuckButton != null;
+            if (!unstuckUsable)
+            {
+                Debug.LogWarning("[게임 메뉴] 끼임방지 버튼이 연결되지 않아 끼임방지를 메뉴에 표시하지 않습니다(메뉴의 다른 기능은 그대로). WordRoom/끼임방지·협동 결과 구성 메뉴로 보완하세요.", this);
+                return;
+            }
+            lockable = new[] { continueButton, settingsButton, mainMenuButton, quitButton, unstuckButton };
+            ArchiveUi.Bind(bindings, unstuckButton, RequestUnstuck);
+            onUnstuck = OnUnstuckFinished;
+            game.UnstuckFinished += onUnstuck;
+        }
+
+        void RequestUnstuck()
+        {
+            if (!open || leaving) return;
+            if (!game.RequestUnstuck(out var why)) Debug.Log($"[끼임방지] 요청하지 않았습니다: {why}");   // nothing was sent
+            RefreshUnstuck();
+        }
+
+        /// <summary>Done: the menu closes and play resumes as after 계속. Failed: logged (play may also be stopped with its reason on screen).</summary>
+        void OnUnstuckFinished(bool ok, string why)
+        {
+            if (ok)
+            {
+                if (open && !leaving) Close();
+                return;
+            }
+            Debug.LogWarning($"[끼임방지] 시작 방으로 돌아가지 못했습니다: {(string.IsNullOrEmpty(why) ? "이유 없음" : why)}");
+            if (open) RefreshUnstuck();
+        }
+
+        /// <summary>While open: the button can be pressed only while a request is possible now (waiting, used, stopped: disabled, still shown).</summary>
+        void RefreshUnstuck()
+        {
+            if (!unstuckUsable) return;
+            var interactable = game.CanRequestUnstuck(out _) && !leaving;
+            if (unstuckButton.interactable != interactable) unstuckButton.interactable = interactable;
         }
 
         void Update()
@@ -110,6 +166,7 @@ namespace WordRoom.Game
             if (!ready) return;
             TakeEscape();                                                    // also for a player connected later
             if (open && blocked != CurrentPlayer) Block(CurrentPlayer);      // the player was replaced while open
+            if (open) RefreshUnstuck();
             var kb = Keyboard.current;
             if (leaving || kb == null || !kb.escapeKey.wasPressedThisFrame) return;
             if (map != null && map.IsOpen)
@@ -139,6 +196,7 @@ namespace WordRoom.Game
             Block(CurrentPlayer);
             FirstPersonPlayer.ReleaseCursor();
             ShowList();
+            RefreshUnstuck();
         }
 
         public void Close()

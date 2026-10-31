@@ -183,6 +183,7 @@ namespace WordRoom.Network
         {
             if (stage == CoopStage.Ended) return;
             stage = CoopStage.Ended;
+            hostChangeStopPending = false;
             LastEndReason = reason;
             if (entryPending) entryLost = true;
             waitingRoomPending = false;
@@ -212,6 +213,8 @@ namespace WordRoom.Network
             hostAttempt = null;
             worldContent = null;
             go = null;
+            finished = false;
+            hostChangeStopPending = false;
             play.Clear();
             poses.Clear();
             sketches.Clear();
@@ -339,6 +342,40 @@ namespace WordRoom.Network
             if (stage != CoopStage.Counting) return;
             stage = CoopStage.Playing;
             Raise();
+        }
+
+        /// <summary>
+        /// The game's one result is confirmed on this device: from now on a host change no longer stops the game and loads
+        /// the waiting room (the result stays on screen until this player leaves by its own button). No host migration.
+        /// </summary>
+        public void MarkFinished()
+        {
+            finished = true;
+            hostChangeStopPending = false;                         // a host change waiting for the game's answer no longer stops it
+        }
+
+        bool finished;
+
+        // Playing, the host changed: the stop waits until the game side has taken the messages already received (each
+        // checked as the real host's when it arrived) — a result among them keeps the game on screen. Limited in time.
+        bool hostChangeStopPending;
+        string hostChangeStopReason;
+        double hostChangeSince;
+
+        /// <summary>A host change during play waits for ResolveHostChange (see OnMasterClientSwitched).</summary>
+        public bool HostChangeStopPending => hostChangeStopPending;
+
+        /// <summary>
+        /// The game side's answer to a waiting host change, after it took every message received so far: with the game's
+        /// result confirmed by it (applied through the usual revision, session and result checks) the game stays finished;
+        /// otherwise the start stops now as it would have at the change (once; StopLocally). Nothing when none waits.
+        /// </summary>
+        public void ResolveHostChange(bool resultConfirmed)
+        {
+            if (!hostChangeStopPending) return;
+            hostChangeStopPending = false;
+            if (resultConfirmed) finished = true;
+            else StopLocally(hostChangeStopReason);
         }
 
         // ---- exploration --------------------------------------------------------------------------------------------
@@ -504,6 +541,7 @@ namespace WordRoom.Network
             if (IsHost && hostAttempt != null && CoopStartRules.HostMayStop(stage))
                 Send(CoopProtocol.AbortCode, CoopProtocol.Encode(new CoopProtocol.Abort { Attempt = hostAttempt.Id, Reason = "호스트가 나가 시작을 중단했습니다" }), ReceiverGroup.Others);
             leaving = true;
+            hostChangeStopPending = false;                                  // this player leaves on its own: no stop is decided any more
             entryPending = entryLost = waitingRoomPending = false;
             if (owned && PhotonNetwork.IsConnected)
             {
@@ -520,6 +558,8 @@ namespace WordRoom.Network
         // ---- time limit ------------------------------------------------------------------------------------------------
         void Update()
         {
+            if (hostChangeStopPending && !leaving && Time.realtimeSinceStartupAsDouble - hostChangeSince > CoopRules.StateCatchUpSeconds)
+                ResolveHostChange(false);                                   // no game side answered (none, or it could not take its messages): stop as before
             if (entry == null || leaving || go != null) return;
             if (stage != CoopStage.Loading && stage != CoopStage.Placing && stage != CoopStage.Placed) return;
             var waited = Time.realtimeSinceStartupAsDouble - startedAt;
@@ -668,6 +708,7 @@ namespace WordRoom.Network
         /// </summary>
         void StopLocally(string reason)
         {
+            hostChangeStopPending = false;
             if (entry == null || !stoppedAttempts.Add(entry.Attempt)) return;
             AbortReason = string.IsNullOrEmpty(reason) ? "시작이 중단되었습니다" : reason;
             stage = CoopStage.Aborted;
@@ -716,7 +757,17 @@ namespace WordRoom.Network
         {
             // every remaining participant stops the attempt, whatever its stage or whether the start time arrived (no
             // host migration at this stage); in the plain waiting room nothing stops
-            if (entry != null && CoopStartRules.StopsOnHostChange(stage)) StopLocally("호스트가 나가 게임 시작을 중단했습니다. 대기실에서 다시 준비하세요");
+            if (entry != null && !finished && CoopStartRules.StopsOnHostChange(stage))
+            {
+                const string reason = "호스트가 나가 게임 시작을 중단했습니다. 대기실에서 다시 준비하세요";
+                if (stage != CoopStage.Playing) StopLocally(reason);        // before play: as before
+                else if (!hostChangeStopPending)
+                {
+                    hostChangeStopPending = true;                           // nothing received is dropped and no scene is loaded yet
+                    hostChangeStopReason = reason;
+                    hostChangeSince = Time.realtimeSinceStartupAsDouble;
+                }
+            }
             ReopenRoomIfMaster();                                  // also when this device had already stopped before it became the master
             Raise();
         }
