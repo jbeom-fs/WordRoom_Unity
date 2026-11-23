@@ -5,7 +5,10 @@
         "WordRoom.World",
         "WordRoom.Data",
         "WordRoom.Unity",
-        "Unity.TextMeshPro"
+        "WordRoom.Game",
+        "Unity.TextMeshPro",
+        "UnityEngine.UI",
+        "Unity.InputSystem"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

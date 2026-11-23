@@ -76,6 +76,12 @@ namespace WordRoom.Shelf
         [Tooltip("동음이의어 갈래 참고 설정(선택). 갈림길은 사전의 EntryId 그룹으로 자동 생성하며, 여기 적은 senseId는 그 항목의 대표 뜻 후보, label은 그 대표 뜻 갈래의 안내 문구로만 씁니다. 비워도 동작합니다.")]
         [SerializeField] List<ShelfFork> forks = ShelfExample.Forks();
 
+        [Header("메뉴·결과 (WordRoom/서가 시안 메뉴·결과 구성으로 연결)")]
+        [Tooltip("Esc 메뉴(재시작 = 이어서 하기). 비어 있으면 같은 오브젝트에서 찾고, 없으면 Esc는 커서 해제만 합니다.")]
+        [SerializeField] ShelfPauseMenu pauseMenu;
+        [Tooltip("목표 도달 결과 화면(다시 도전). 비어 있으면 같은 오브젝트에서 찾고, 없으면 화면 아래 안내만 남습니다.")]
+        [SerializeField] ShelfResultScreen resultScreen;
+
         [Header("배치")]
         [SerializeField] ShelfLayout layout = new ShelfLayout();
         [SerializeField] ShelfMaterials materials = new ShelfMaterials();
@@ -83,7 +89,11 @@ namespace WordRoom.Shelf
         readonly Dictionary<string, ShelfEntry> entries = new Dictionary<string, ShelfEntry>();    // room key → entry
         readonly Dictionary<string, ShelfEntry> requests = new Dictionary<string, ShelfEntry>();   // "word#senseId or empty" → entry or null
         readonly Dictionary<string, Targets> targets = new Dictionary<string, Targets>();
-        readonly List<string> path = new List<string>();
+        readonly List<string> path = new List<string>();         // room labels (word + SenseId) for the HUD
+        readonly List<string> pathWords = new List<string>();    // headwords in order, for the result
+        ShelfEntry startEntry;
+        double runStart;                                         // realtime when the run became playable
+        bool retrying;
         WordRoomDataset dataset;
         Task<ShelfLinkGraph> graphTask;          // the one running computation of this component (null: none)
         CancellationTokenSource graphCancel;
@@ -120,6 +130,10 @@ namespace WordRoom.Shelf
         [ContextMenu("예제 4 설정: 가부키 → 에도")]
         void ApplyEdoExample() => ApplyExample("가부키", "412174", "에도", "466082");
 
+        /// <summary>해안(317035) "바다와 육지가 맞닿은 부분." → 바다(331764) "…육지 면적의 …" → 면적(148273): 2 moves.</summary>
+        [ContextMenu("예제 5 설정: 해안 → 면적")]
+        void ApplyCoastExample() => ApplyExample("해안", "317035", "면적", "148273");
+
         void ApplyExample(string fromWord, string fromSense, string toWord, string toSense)
         {
 #if UNITY_EDITOR
@@ -139,6 +153,13 @@ namespace WordRoom.Shelf
         void Awake()
         {
             if (data == null) data = GetComponent<WordRoomDataService>();
+            if (pauseMenu == null) pauseMenu = GetComponent<ShelfPauseMenu>();
+            if (resultScreen == null) resultScreen = GetComponent<ShelfResultScreen>();
+        }
+
+        void OnEnable()
+        {
+            if (resultScreen != null) resultScreen.RetryRequested += Retry;
         }
 
         void Start()
@@ -156,6 +177,7 @@ namespace WordRoom.Shelf
         /// </summary>
         void OnDisable()
         {
+            if (resultScreen != null) resultScreen.RetryRequested -= Retry;
             if (graphTask == null) return;
             CancelGraph();
             if (!stopped) SetHint(null);
@@ -296,28 +318,103 @@ namespace WordRoom.Shelf
             }
 
             startLabel = start.Label;
+            startEntry = start;
             builder = new ShelfRoomBuilder(layout, materials, font, transform);
-            current = builder.Build(start, Vector3.zero, Quaternion.identity, false);
-            path.Add(start.Label);
-
-            // PlaceAt faces world +Z, which is the start room's corridor; then step back near the entrance.
-            var spawn = current.transform.TransformPoint(new Vector3(0f, 0f, Mathf.Min(layout.spawnDepth, current.Length * 0.5f)));
-            if (!player.PlaceAt(current.Floor, out var failure) || !player.MoveOnto(current.transform, spawn, out failure))
+            if (!BeginRun(out var failure))
             {
                 Stop($"시작 방에 플레이어를 배치하지 못했습니다: {failure}");
                 return;
             }
             running = true;
+            Debug.Log($"[서가 시안] 시작: {start.Label} → 목표 {GoalLabel} · {Describe(start)}", this);
+        }
+
+        /// <summary>
+        /// A new run of this challenge: the start room built again from the kept entry (same layout and links), the
+        /// player placed near its entrance, 0 moves, a path of the start room only, and the timer started — from here,
+        /// when the player can play (dictionary loading and the link graph are not counted; an open Escape menu is).
+        /// </summary>
+        bool BeginRun(out string failure)
+        {
+            current = builder.Build(startEntry, Vector3.zero, Quaternion.identity, false);
+            openPassage = null;
+            moves = 0;
+            reached = false;
+            path.Clear();
+            path.Add(startEntry.Label);
+            pathWords.Clear();
+            pathWords.Add(startEntry.Word);
+
+            // PlaceAt faces world +Z, which is the start room's corridor; then step back near the entrance.
+            var spawn = current.transform.TransformPoint(new Vector3(0f, 0f, Mathf.Min(layout.spawnDepth, current.Length * 0.5f)));
+            if (!player.PlaceAt(current.Floor, out failure) || !player.MoveOnto(current.transform, spawn, out failure)) return false;
+            runStart = Time.realtimeSinceStartupAsDouble;
             SetHint(null);
             RefreshStatus();
-            Debug.Log($"[서가 시안] 시작: {start.Label} → 목표 {GoalLabel} · {Describe(start)}", this);
+            return true;
+        }
+
+        /// <summary>
+        /// The goal was entered: time, moves and path are fixed once, the challenge's personal bests updated and saved,
+        /// and the result screen shown (the Escape menu is closed and off meanwhile). Without a usable result screen the
+        /// success hint stays on screen and the menu comes back.
+        /// </summary>
+        void Finish()
+        {
+            var seconds = Time.realtimeSinceStartupAsDouble - runStart;
+            var challenge = ShelfRecords.ChallengeKey(startEntry.Word, startEntry.SenseId, goalSurface, goalSense);
+            var best = ShelfRecords.Submit(challenge, seconds, moves, out var newTime, out var newMoves);
+            Debug.Log($"[서가 시안] 기록 확정 {challenge}: {seconds:0.0}초 · 이동 {moves}회 · {string.Join(" → ", pathWords)}" +
+                      $" (최단 {best.Seconds:0.0}초{(newTime ? " 새 기록" : "")} · 최소 {best.Moves}회{(newMoves ? " 새 기록" : "")})", this);
+            if (pauseMenu != null)
+            {
+                pauseMenu.Close();
+                pauseMenu.enabled = false;                   // no Escape menu over the result
+            }
+            if (resultScreen != null && resultScreen.Show(seconds, moves, pathWords, best, newTime, newMoves)) return;
+            if (pauseMenu != null) pauseMenu.enabled = true;
+        }
+
+        /// <summary>
+        /// 다시 도전: the same challenge from the start in this scene (no scene load). Everything of the last run goes —
+        /// the goal room, an open door's rooms and fork — the start room is built again from the same entry, and the
+        /// dictionary, the link graph and the saved bests are reused. Taken once per result (the button is disabled at
+        /// the press and only a finished run can be retried), so the start room is never built twice.
+        /// </summary>
+        void Retry()
+        {
+            if (!running || !reached || retrying) return;
+            retrying = true;
+            try
+            {
+                if (resultScreen != null) resultScreen.Hide();
+                if (openPassage != null) openPassage.Close();
+                if (current != null)
+                {
+                    current.gameObject.SetActive(false);         // its colliders go now, before the new start room is placed
+                    Destroy(current.gameObject);
+                }
+                current = null;
+                if (!BeginRun(out var failure))
+                {
+                    Stop($"다시 도전: 시작 방에 플레이어를 배치하지 못했습니다: {failure}");
+                    return;
+                }
+                if (pauseMenu != null) pauseMenu.enabled = true;
+                Debug.Log($"[서가 시안] 다시 도전: {startEntry.Label} → 목표 {GoalLabel}", this);
+            }
+            finally
+            {
+                retrying = false;
+            }
         }
 
         void UpdateAim()
         {
             if (reached)
             {
-                SetHint($"목표 도달 성공 · {startLabel} → {current.Room.Label} · 이동 {moves}회");
+                if (resultScreen != null && resultScreen.IsShown) SetHint(null);
+                else SetHint($"목표 도달 성공 · {startLabel} → {current.Room.Label} · 이동 {moves}회");
                 return;
             }
             if (!player.CanInteract || !player.TryGetAimed(layout.interactDistance, out ShelfHandle handle) ||
@@ -394,11 +491,13 @@ namespace WordRoom.Shelf
             openPassage = null;
             moves++;
             path.Add(room.Room.Label);
+            pathWords.Add(room.Room.Word);
             Destroy(previous.gameObject);
             current.SealEntrance();
             reached = IsGoal(current.Room);
             Debug.Log($"[서가 시안] 입장: {previous.Room.Label} → {current.Room.Label} (이동 {moves}회, 문 {current.Room.DoorCount}개){(reached ? " · 목표 도달 성공" : "")} · {Describe(current.Room)}", this);
             RefreshStatus();
+            if (reached) Finish();                               // once: a reached run takes no more doors
         }
 
         bool IsGoal(ShelfEntry e) => e.Word == goalSurface && (goalSense == null || e.SenseId == goalSense);

@@ -9,6 +9,7 @@
         "WordRoom.Generation",
         "WordRoom.World",
         "WordRoom.Game",
+        "WordRoom.Shelf",
         "WordRoom.Settings",
         "WordRoom.Network",
         "PhotonRealtime",
