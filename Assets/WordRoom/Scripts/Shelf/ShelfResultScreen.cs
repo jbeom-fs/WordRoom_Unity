@@ -15,8 +15,8 @@ namespace WordRoom.Shelf
     /// at the goal entry. While shown it alone takes input: the player's input is blocked, the cursor is free and a
     /// full-screen overlay catches clicks (the demo turns the Escape menu off first). 다시 도전 is taken once per showing
     /// (the button is disabled at the press) and raises RetryRequested; the demo then hides this and starts the same
-    /// challenge again. The display is the scene's Shelf Result Canvas (prefab instance, inactive while hidden), placed
-    /// and connected by WordRoom/서가 시안 메뉴·결과 구성. A screen that is not usable is never forced on: Show returns
+    /// challenge again. The display is the scene's Shelf Result Canvas (prefab instance, inactive while hidden), saved
+    /// in the scene with its references. A screen that is not usable is never forced on: Show returns
     /// false (reported once) and the demo keeps its on-screen success hint instead.
     /// </summary>
     [DisallowMultipleComponent]
@@ -52,7 +52,7 @@ namespace WordRoom.Shelf
             ready = missing == null;
             if (!ready)
             {
-                Debug.LogError($"[서가 결과] ShelfResultScreen의 참조가 비어 있어 결과 화면을 쓰지 않습니다(목표 도달 안내는 그대로): {missing}. WordRoom/서가 시안 메뉴·결과 구성을 실행하세요.", this);
+                Debug.LogError($"[서가 결과] ShelfResultScreen의 참조가 비어 있어 결과 화면을 쓰지 않습니다(목표 도달 안내는 그대로): {missing}. ShelfCorridorPrototype 씬의 Shelf Result Canvas 참조를 Inspector에서 확인하세요.", this);
                 return;
             }
             ArchiveUi.Bind(bindings, retryButton, OnRetry);

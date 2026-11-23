@@ -78,7 +78,7 @@ namespace WordRoom.Game
             ready = missing == null;
             if (!ready)
             {
-                Debug.LogError($"[지도] MapScreen을 쓸 수 없어 지도를 열지 않습니다(게임 입력은 그대로): {missing}. WordRoom/지도 화면 구성 메뉴로 Gameplay 씬의 지도 UI를 배치·연결하세요.", this);
+                Debug.LogError($"[지도] MapScreen을 쓸 수 없어 지도를 열지 않습니다(게임 입력은 그대로): {missing}. Gameplay 씬의 지도 UI 참조를 Inspector에서 확인하세요.", this);
                 return;
             }
             view.Initialize();
@@ -163,7 +163,7 @@ namespace WordRoom.Game
             if (missing != null)
             {
                 if (s != null) s.Hide();
-                Debug.LogWarning($"[지도] 지도 그림 부품이 없거나 빠져 그림 기능을 끕니다(지도의 다른 기능은 그대로): {missing}. WordRoom/지도 화면 구성 메뉴로 보완하세요.", this);
+                Debug.LogWarning($"[지도] 지도 그림 부품이 없거나 빠져 그림 기능을 끕니다(지도의 다른 기능은 그대로): {missing}. Map Canvas의 MapSketchView 참조를 Inspector에서 확인하세요.", this);
                 return;
             }
             sketchView = s;
@@ -242,7 +242,7 @@ namespace WordRoom.Game
             if (others > slotIds.Length && !slotsShortReported)
             {
                 slotsShortReported = true;
-                Debug.LogWarning($"[지도] 다른 참가자 {others}명 중 {slotIds.Length}명만 지도에 표시합니다(원격 마커 슬롯 부족). WordRoom/지도 화면 구성 메뉴로 Map Canvas의 원격 마커를 보완하세요.", this);
+                Debug.LogWarning($"[지도] 다른 참가자 {others}명 중 {slotIds.Length}명만 지도에 표시합니다(원격 마커 슬롯 부족). Map Canvas의 MapView.remoteMarkers를 Inspector에서 확인하세요.", this);
             }
         }
 

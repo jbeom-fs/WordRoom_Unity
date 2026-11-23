@@ -76,7 +76,7 @@ namespace WordRoom.Shelf
         [Tooltip("동음이의어 갈래 참고 설정(선택). 갈림길은 사전의 EntryId 그룹으로 자동 생성하며, 여기 적은 senseId는 그 항목의 대표 뜻 후보, label은 그 대표 뜻 갈래의 안내 문구로만 씁니다. 비워도 동작합니다.")]
         [SerializeField] List<ShelfFork> forks = ShelfExample.Forks();
 
-        [Header("메뉴·결과 (WordRoom/서가 시안 메뉴·결과 구성으로 연결)")]
+        [Header("메뉴·결과")]
         [Tooltip("Esc 메뉴(재시작 = 이어서 하기). 비어 있으면 같은 오브젝트에서 찾고, 없으면 Esc는 커서 해제만 합니다.")]
         [SerializeField] ShelfPauseMenu pauseMenu;
         [Tooltip("목표 도달 결과 화면(다시 도전). 비어 있으면 같은 오브젝트에서 찾고, 없으면 화면 아래 안내만 남습니다.")]

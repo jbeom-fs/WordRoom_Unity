@@ -81,7 +81,7 @@ namespace WordRoom.Game
             ready = missing == null;
             if (!ready)
             {
-                Debug.LogError($"[결과] ResultScreen의 참조가 비어 있어 결과 화면을 쓰지 않습니다(목표 도달 안내와 Esc 메뉴의 메인 메뉴 복귀는 그대로): {missing}. WordRoom/결과 화면 구성 메뉴로 Gameplay 씬의 결과 UI를 배치·연결하세요.", this);
+                Debug.LogError($"[결과] ResultScreen의 참조가 비어 있어 결과 화면을 쓰지 않습니다(목표 도달 안내와 Esc 메뉴의 메인 메뉴 복귀는 그대로): {missing}. Gameplay 씬의 Result Canvas 참조를 Inspector에서 확인하세요.", this);
                 return;
             }
             ArchiveUi.Bind(bindings, mainMenuButton, ToMainMenu);
@@ -159,7 +159,7 @@ namespace WordRoom.Game
                 var parts = coopResult == null ? "coopResult(비어 있음)" : coopResult.MissingParts();
                 if (parts != null)
                 {
-                    ReportUnusable($"협동 결과 부품이 없거나 빠짐: {parts}. WordRoom/끼임방지·협동 결과 구성 메뉴로 보완하세요");
+                    ReportUnusable($"협동 결과 부품이 없거나 빠짐: {parts}. ResultScreen의 coopResult와 Result Canvas의 협동 결과 부품을 Inspector에서 확인하세요");
                     return;
                 }
             }

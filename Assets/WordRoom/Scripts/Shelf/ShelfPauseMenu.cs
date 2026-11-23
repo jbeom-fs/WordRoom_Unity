@@ -16,8 +16,8 @@ namespace WordRoom.Shelf
     /// disabled in this prototype; 게임종료 uses the project's quit (ArchiveUi.QuitGame).
     /// While open the player's input is blocked (no look, walking, E, click-to-lock; gravity goes on) and the cursor is
     /// free; closing unblocks from the next frame and locks the cursor again only for a placed player. Time is not
-    /// paused. The menu is the scene's Shelf Menu Canvas (prefab instance, inactive while closed), placed and connected
-    /// by WordRoom/서가 시안 메뉴·결과 구성. With incomplete references it reports once and leaves Escape to the player.
+    /// paused. The menu is the scene's Shelf Menu Canvas (prefab instance, inactive while closed), saved in the scene
+    /// with its references. With incomplete references it reports once and leaves Escape to the player.
     /// The demo turns this component off while the result screen is shown (no menu over the result).
     /// </summary>
     [DisallowMultipleComponent]
@@ -57,7 +57,7 @@ namespace WordRoom.Shelf
             ready = missing == null;
             if (!ready)
             {
-                Debug.LogError($"[서가 메뉴] ShelfPauseMenu의 참조가 비어 있어 Esc 메뉴를 쓰지 않습니다(Esc는 플레이어의 커서 해제로 남김): {missing}. WordRoom/서가 시안 메뉴·결과 구성을 실행하세요.", this);
+                Debug.LogError($"[서가 메뉴] ShelfPauseMenu의 참조가 비어 있어 Esc 메뉴를 쓰지 않습니다(Esc는 플레이어의 커서 해제로 남김): {missing}. ShelfCorridorPrototype 씬의 Shelf Menu Canvas 참조를 Inspector에서 확인하세요.", this);
                 return;
             }
             ArchiveUi.Bind(bindings, resumeButton, Close);

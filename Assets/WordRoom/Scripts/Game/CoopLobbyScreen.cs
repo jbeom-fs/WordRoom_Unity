@@ -93,7 +93,7 @@ namespace WordRoom.Game
             ready = missing == null;
             if (!ready)
             {
-                Debug.LogError($"[협동] CoopLobbyScreen의 참조가 비어 있어 협동 로비를 열 수 없습니다: {missing}. WordRoom/협동 로비 구성 메뉴로 MainMenu 씬의 협동 UI를 배치·연결하세요.", this);
+                Debug.LogError($"[협동] CoopLobbyScreen의 참조가 비어 있어 협동 로비를 열 수 없습니다: {missing}. MainMenu 씬의 협동 UI 참조를 Inspector에서 확인하세요.", this);
                 return;
             }
             ArchiveUi.Bind(bindings, view.retryButton, Retry);
@@ -123,10 +123,10 @@ namespace WordRoom.Game
                     ArchiveUi.Bind(bindings, view.difficultyButtons[i], () => ChooseDifficulty(d));
                 }
             }
-            else Debug.LogWarning("[협동] 대기실 난이도 UI가 없어 게임 시작을 할 수 없습니다(대기실의 다른 기능은 그대로). WordRoom/협동 로비 구성 메뉴로 추가하세요.", this);
+            else Debug.LogWarning("[협동] 대기실 난이도 UI가 없어 게임 시작을 할 수 없습니다(대기실의 다른 기능은 그대로). Coop Canvas의 CoopLobbyView 대기실 난이도 참조를 Inspector에서 확인하세요.", this);
             hasRefresh = view.HasRefresh;
             if (hasRefresh) ArchiveUi.Bind(bindings, view.refreshButton, RefreshList);
-            else Debug.LogWarning("[협동] 로비 새로고침 버튼이 없어 방 목록을 새로고침할 수 없습니다(로비의 다른 기능은 그대로). WordRoom/협동 로비 구성 메뉴로 추가하세요.", this);
+            else Debug.LogWarning("[협동] 로비 새로고침 버튼이 없어 방 목록을 새로고침할 수 없습니다(로비의 다른 기능은 그대로). Coop Canvas의 CoopLobbyView 새로고침 버튼 참조를 Inspector에서 확인하세요.", this);
             submitCode = _ => JoinCode();                                  // Enter in the RoomCode field
             view.codeInput.onSubmit.AddListener(submitCode);
             view.nameInput.characterLimit = CoopRules.MaxDisplayNameLength;

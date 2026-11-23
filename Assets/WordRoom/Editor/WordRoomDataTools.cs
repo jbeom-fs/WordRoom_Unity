@@ -2,37 +2,20 @@ using System;
 using System.IO;
 using UnityEditor;
 using UnityEditor.Build.Reporting;
-using UnityEditor.SceneManagement;
 using UnityEngine;
-using UnityEngine.SceneManagement;
 using WordRoom.Data;
 using WordRoom.Data.Validation;
-using WordRoom.UnityLayer;
 
 namespace WordRoom.EditorTools
 {
-    /// <summary>Editor menu and batch-mode entry points for the data check scene, a Windows check build and a package check.</summary>
+    /// <summary>
+    /// Editor menu and batch-mode entry points for a package check and a Windows check build. The build uses the saved
+    /// data check scene (ScenePath) as it is; nothing here creates or changes a scene.
+    /// </summary>
     public static class WordRoomDataTools
     {
         public const string ScenePath = "Assets/WordRoom/Scenes/DataCheck.unity";
         const string DefaultBuild = "Builds/WordRoomDataCheck_Win64/WordRoomDataCheck.exe";
-
-        [MenuItem("WordRoom/Data/Create Data Check Scene")]
-        public static void CreateDataCheckScene()
-        {
-            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
-            var camera = new GameObject("Main Camera");
-            var cam = camera.AddComponent<Camera>();
-            cam.clearFlags = CameraClearFlags.SolidColor;
-            cam.backgroundColor = new Color(0.12f, 0.13f, 0.15f);
-            camera.tag = "MainCamera";
-            var data = new GameObject("WordRoomData");
-            data.AddComponent<WordRoomDataService>();
-            data.AddComponent<WordRoomDataInspector>();
-            Directory.CreateDirectory(Path.GetDirectoryName(ScenePath));
-            EditorSceneManager.SaveScene(scene, ScenePath);
-            Debug.Log($"데이터 확인 장면 저장: {ScenePath}");
-        }
 
         [MenuItem("WordRoom/Data/Check Package Against Python Reference")]
         public static void CheckPackage()
@@ -55,21 +38,18 @@ namespace WordRoom.EditorTools
             var args = Environment.GetCommandLineArgs();
             var i = Array.IndexOf(args, "-wordroomBuildPath");
             var path = i >= 0 && i + 1 < args.Length ? args[i + 1] : DefaultBuild;
-            if (!File.Exists(ScenePath)) CreateDataCheckScene();
             var ok = BuildWindows(path);
             EditorApplication.Exit(ok ? 0 : 1);
         }
 
-        /// <summary>Batch mode: creates the scene only.</summary>
-        public static void BatchCreateScene()
-        {
-            CreateDataCheckScene();
-            EditorApplication.Exit(0);
-        }
-
+        /// <summary>Builds the saved data check scene for Windows 64-bit; false (logged with the path) when that scene is missing.</summary>
         public static bool BuildWindows(string path)
         {
-            if (!File.Exists(ScenePath)) CreateDataCheckScene();
+            if (!File.Exists(ScenePath))
+            {
+                Debug.LogError($"데이터 확인 장면이 없어 빌드하지 않습니다: {ScenePath}");
+                return false;
+            }
             var package = Path.Combine(Application.streamingAssetsPath, PackageFormat.DefaultFolderName, PackageFormat.Manifest);
             if (!File.Exists(package)) Debug.LogWarning($"데이터 패키지가 없어 빌드에 포함되지 않습니다: {package}");
             var options = new BuildPlayerOptions

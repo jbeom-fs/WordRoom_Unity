@@ -26,7 +26,7 @@ namespace WordRoom.World
         const int IgnoreRaycastLayer = 2;
         const int BufferSize = 6;
 
-        [Header("외형 (WordRoom/협동 로봇 외형 구성으로 연결)")]
+        [Header("외형")]
         [Tooltip("다른 참가자 표시용 프리팹(루트 = 발밑, +Z 정면, 모델은 Visual 자식 아래). 비우면 다른 참가자 외형을 표시하지 않습니다(플레이는 계속).")]
         [SerializeField] GameObject robotPrefab;
         [Tooltip("참가자 색으로 바꿀 재질(ArchiveRobot_Accent). 이 재질을 쓰는 슬롯만 참가자별 색이 됩니다. 비우면 색 구분 없이 표시합니다.")]
@@ -240,7 +240,7 @@ namespace WordRoom.World
                 if (!missingLogged)
                 {
                     missingLogged = true;
-                    Debug.LogWarning("[협동] 원격 플레이어 프리팹이 연결되지 않아 다른 참가자 외형을 표시하지 않습니다(플레이는 계속). WordRoom/협동 로봇 외형 구성 메뉴를 실행하세요.", this);
+                    Debug.LogWarning("[협동] 원격 플레이어 프리팹이 연결되지 않아 다른 참가자 외형을 표시하지 않습니다(플레이는 계속). RemotePlayers의 robotPrefab 참조를 Inspector에서 확인하세요.", this);
                 }
                 return false;
             }

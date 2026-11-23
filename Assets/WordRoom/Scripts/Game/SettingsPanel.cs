@@ -153,7 +153,7 @@ namespace WordRoom.Game
             ArchiveUi.Need(closeButton, "closeButton", ref missing);
             if (missing != null)
             {
-                Debug.LogError($"[설정] '{name}'의 참조가 비어 있어 설정 화면을 열지 않습니다: {missing}. WordRoom/메인 메뉴와 게임 설정 구성 메뉴나 Inspector에서 SettingsPanel 프리팹의 참조를 확인하세요.", this);
+                Debug.LogError($"[설정] '{name}'의 참조가 비어 있어 설정 화면을 열지 않습니다: {missing}. Inspector에서 SettingsPanel 프리팹의 참조를 확인하세요.", this);
                 return ready = false;
             }
 

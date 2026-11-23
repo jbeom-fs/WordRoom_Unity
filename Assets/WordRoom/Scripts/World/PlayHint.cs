@@ -74,7 +74,7 @@ namespace WordRoom.World
             initialized = true;
             if (canvas != null && label != null) return ready = true;
             Debug.LogError($"[안내] PlayHint의 표시 참조가 비어 있어 화면 안내를 표시하지 않습니다(플레이는 계속): " +
-                           $"{(canvas == null ? "canvas " : "")}{(label == null ? "label" : "")}. WordRoom/메인 메뉴와 게임 설정 구성 메뉴로 PlayHintCanvas를 배치·연결하세요.", this);
+                           $"{(canvas == null ? "canvas " : "")}{(label == null ? "label" : "")}. PlayHintCanvas 참조를 Inspector에서 확인하세요.", this);
             return ready = false;
         }
     }

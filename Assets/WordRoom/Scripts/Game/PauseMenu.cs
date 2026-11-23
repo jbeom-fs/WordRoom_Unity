@@ -112,7 +112,7 @@ namespace WordRoom.Game
             ArchiveUi.Need(mainMenuButton, nameof(mainMenuButton), ref missing);
             ArchiveUi.Need(quitButton, nameof(quitButton), ref missing);
             if (missing == null) return true;
-            Debug.LogError($"[게임 메뉴] PauseMenu의 참조가 비어 있어 Esc 게임 메뉴를 사용하지 않습니다(Esc는 플레이어의 커서 해제로 남김): {missing}. WordRoom/메인 메뉴와 게임 설정 구성 메뉴로 Gameplay 씬의 UI를 배치·연결하세요.", this);
+            Debug.LogError($"[게임 메뉴] PauseMenu의 참조가 비어 있어 Esc 게임 메뉴를 사용하지 않습니다(Esc는 플레이어의 커서 해제로 남김): {missing}. Gameplay 씬의 GameMenu Canvas 참조를 Inspector에서 확인하세요.", this);
             return false;
         }
 
@@ -129,7 +129,7 @@ namespace WordRoom.Game
             unstuckUsable = unstuckButton != null;
             if (!unstuckUsable)
             {
-                Debug.LogWarning("[게임 메뉴] 끼임방지 버튼이 연결되지 않아 끼임방지를 메뉴에 표시하지 않습니다(메뉴의 다른 기능은 그대로). WordRoom/끼임방지·협동 결과 구성 메뉴로 보완하세요.", this);
+                Debug.LogWarning("[게임 메뉴] 끼임방지 버튼이 연결되지 않아 끼임방지를 메뉴에 표시하지 않습니다(메뉴의 다른 기능은 그대로). PauseMenu의 unstuckButton 참조를 Inspector에서 확인하세요.", this);
                 return;
             }
             lockable = new[] { continueButton, settingsButton, mainMenuButton, quitButton, unstuckButton };

@@ -38,7 +38,7 @@ namespace WordRoom.Game
         [SerializeField] Button settingsButton;
         [SerializeField] Button quitButton;
 
-        [Header("협동 (선택 — WordRoom/협동 로비 구성으로 연결)")]
+        [Header("협동 (선택)")]
         [Tooltip("메인 화면의 협동 버튼. 비우면 협동 진입 없이 기존 메뉴만 동작합니다.")]
         [SerializeField] Button coopButton;
         [Tooltip("협동 로비 화면. 협동 버튼이 있으면 필요합니다.")]
@@ -86,7 +86,7 @@ namespace WordRoom.Game
                 else
                 {
                     coopButton.interactable = false;                   // nothing to open: never a dead click
-                    Debug.LogWarning("[메뉴] 협동 버튼은 있지만 CoopLobbyScreen이 연결되지 않아 비활성으로 둡니다. WordRoom/협동 로비 구성 메뉴로 연결하세요.", this);
+                    Debug.LogWarning("[메뉴] 협동 버튼은 있지만 CoopLobbyScreen이 연결되지 않아 비활성으로 둡니다. MainMenuController의 coop 참조를 Inspector에서 확인하세요.", this);
                 }
             }
             ArchiveUi.Bind(bindings, startButton, ShowDifficulty);
@@ -117,7 +117,7 @@ namespace WordRoom.Game
             ArchiveUi.Need(startGameButton, nameof(startGameButton), ref missing);
             ArchiveUi.Need(message, nameof(message), ref missing);
             if (missing == null) return true;
-            Debug.LogError($"[메뉴] MainMenuController의 화면 참조가 비어 있어 메인 메뉴를 사용할 수 없습니다: {missing}. WordRoom/메인 메뉴와 게임 설정 구성 메뉴로 MainMenu 씬의 UI를 배치·연결하세요.", this);
+            Debug.LogError($"[메뉴] MainMenuController의 화면 참조가 비어 있어 메인 메뉴를 사용할 수 없습니다: {missing}. MainMenu 씬의 UI 참조를 Inspector에서 확인하세요.", this);
             return false;
         }
 

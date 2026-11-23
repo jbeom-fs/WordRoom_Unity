@@ -5,7 +5,7 @@ using UnityEngine.UI;
 namespace WordRoom.Game
 {
     /// <summary>
-    /// The parts of the Coop Canvas prefab (saved by WordRoom/협동 로비 구성; nothing is built at runtime): the lobby
+    /// The parts of the Coop Canvas prefab (saved in the project; nothing is built at runtime): the lobby
     /// (connection status, 새로고침, room list with its template row, selected room, create, RoomCode entry, back), the create
     /// panel over it, and the waiting room (name, RoomCode with copy, count, four participant rows, ready, start,
     /// leave). Only references; CoopLobbyScreen drives them. The root is saved active; the scene instance is placed
@@ -57,13 +57,13 @@ namespace WordRoom.Game
         public Button leaveButton;
         public TextMeshProUGUI waitingMessage;
 
-        [Header("대기실 난이도 (WordRoom/협동 로비 구성으로 추가)")]
+        [Header("대기실 난이도")]
         [Tooltip("쉬움·보통·어려움 순서. 호스트만 누를 수 있습니다.")]
         public Button[] difficultyButtons = new Button[3];
         [Tooltip("현재 난이도와 바꿀 수 있는 사람 안내")]
         public TextMeshProUGUI difficultyText;
 
-        [Header("로비 새로고침 (WordRoom/협동 로비 구성으로 추가)")]
+        [Header("로비 새로고침")]
         [Tooltip("방 목록 새로고침. 비어 있으면 새로고침만 쓸 수 없고 로비의 다른 기능은 그대로입니다.")]
         public Button refreshButton;
 

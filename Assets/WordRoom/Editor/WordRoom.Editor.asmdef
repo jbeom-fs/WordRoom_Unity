@@ -4,19 +4,9 @@
     "references": [
         "WordRoom.Data",
         "WordRoom.Data.Validation",
-        "WordRoom.Unity",
-        "WordRoom.RoomDebug",
         "WordRoom.Generation",
         "WordRoom.World",
-        "WordRoom.Game",
-        "WordRoom.Shelf",
-        "WordRoom.Settings",
-        "WordRoom.Network",
-        "PhotonRealtime",
-        "PhotonUnityNetworking",
-        "Unity.TextMeshPro",
-        "UnityEngine.UI",
-        "Unity.InputSystem"
+        "Unity.TextMeshPro"
     ],
     "includePlatforms": [
         "Editor"

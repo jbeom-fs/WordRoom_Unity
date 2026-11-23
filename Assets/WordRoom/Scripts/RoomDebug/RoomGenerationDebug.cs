@@ -985,7 +985,7 @@ namespace WordRoom.RoomDebug
             else if (visible && !hudMissingLogged)
             {
                 hudMissingLogged = true;
-                Debug.LogWarning("[HUD] WordRoomHud가 없어 현재·목표 단어를 화면에 표시하지 않습니다(플레이는 계속). RoomGenerationDebug 오브젝트에 WordRoomHud를 두고 WordRoom/메인 메뉴와 게임 설정 구성 메뉴로 HudCanvas를 연결하세요.");
+                Debug.LogWarning("[HUD] WordRoomHud가 없어 현재·목표 단어를 화면에 표시하지 않습니다(플레이는 계속). RoomGenerationDebug의 hud 참조에 HudCanvas가 연결된 WordRoomHud를 지정하세요.");
             }
         }
 
@@ -1218,7 +1218,7 @@ namespace WordRoom.RoomDebug
             else if (!string.IsNullOrEmpty(text) && !hintMissingLogged)
             {
                 hintMissingLogged = true;
-                Debug.LogWarning("[안내] PlayHint가 없어 화면 안내를 표시하지 않습니다(플레이는 계속). RoomGenerationDebug 오브젝트에 PlayHint를 두고 WordRoom/메인 메뉴와 게임 설정 구성 메뉴로 PlayHintCanvas를 연결하세요.");
+                Debug.LogWarning("[안내] PlayHint가 없어 화면 안내를 표시하지 않습니다(플레이는 계속). RoomGenerationDebug의 hint 참조에 PlayHintCanvas가 연결된 PlayHint를 지정하세요.");
             }
         }
 
@@ -1389,7 +1389,7 @@ namespace WordRoom.RoomDebug
                 if (!remoteMissingLogged)
                 {
                     remoteMissingLogged = true;
-                    Debug.LogWarning("[협동] RemotePlayers가 없어 다른 참가자 외형을 표시하지 않습니다(플레이는 계속). WordRoom/협동 로봇 외형 구성 메뉴로 Gameplay에 연결하세요.", this);
+                    Debug.LogWarning("[협동] RemotePlayers가 없어 다른 참가자 외형을 표시하지 않습니다(플레이는 계속). Gameplay 씬의 RoomGenerationDebug.remotePlayers 참조를 Inspector에서 확인하세요.", this);
                 }
                 return;
             }

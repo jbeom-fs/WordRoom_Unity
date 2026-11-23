@@ -91,7 +91,7 @@ namespace WordRoom.World
             {
                 Debug.LogError($"[HUD] WordRoomHud의 표시 참조가 비어 있어 현재·목표 단어를 표시하지 않습니다(플레이는 계속): " +
                                $"{(canvas == null ? "canvas " : "")}{(currentText == null ? "currentText " : "")}{(targetText == null ? "targetText" : "")}. " +
-                               "WordRoom/메인 메뉴와 게임 설정 구성 메뉴로 HudCanvas를 배치·연결하세요.", this);
+                               "HudCanvas 참조를 Inspector에서 확인하세요.", this);
                 return ready = false;
             }
             currentSize = currentText.fontSize;

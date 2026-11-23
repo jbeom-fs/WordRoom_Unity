@@ -184,7 +184,7 @@ namespace WordRoom.Game
             if ((pencilCursor == null || eraserCursor == null || handCursor == null) && !cursorWarned)
             {
                 cursorWarned = true;
-                Debug.LogWarning("[지도] 그림 커서 이미지가 비어 있어 해당 커서 대신 기본 화살표를 씁니다(그림은 그대로). WordRoom/지도 화면 구성 메뉴로 커서를 만들고 연결하세요.", this);
+                Debug.LogWarning("[지도] 그림 커서 이미지가 비어 있어 해당 커서 대신 기본 화살표를 씁니다(그림은 그대로). MapSketchView의 pencilCursor·eraserCursor·handCursor 참조를 Inspector에서 확인하세요.", this);
             }
             ShowTool();
         }

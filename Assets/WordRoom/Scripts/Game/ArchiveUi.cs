@@ -9,9 +9,8 @@ namespace WordRoom.Game
 {
     /// <summary>
     /// Runtime side of the archive-style menus (dark walnut panels, 4-unit brass frame, warm ivory text). The menus
-    /// themselves are prefabs and scene objects saved in the Editor (WordRoom.EditorTools.ArchiveUiBuilder, run by
-    /// WordRoom/메인 메뉴와 게임 설정 구성); nothing is built or added here at runtime. What stays is the palette
-    /// (also used by the builder), selection, quitting, the reference check and the button binding: each listener
+    /// themselves are prefabs and scene objects saved in the project; nothing is built or added here at
+    /// runtime. What stays is the palette, selection, quitting, the reference check and the button binding: each listener
     /// is added once by code (the prefabs carry no Inspector click events), plays the click before its action, and
     /// is removed again by exactly that delegate, so listeners added by others are never touched.
     /// </summary>
