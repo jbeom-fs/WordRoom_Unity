@@ -43,8 +43,8 @@ namespace WordRoom.EditorTools
 
         /// <summary>
         /// Goal result (order 300): Overlay and the Result panel — 목표 도달, rows 소요 시간 (TimeRow), 이동 횟수 (MovesRow),
-        /// the 지나온 단어 label and the wrapped path (PathText), rows 최단 시간 (BestTimeRow) and 최소 이동 (BestMovesRow),
-        /// and 다시 도전 (RetryButton). Values ("Value" children) are written by ShelfResultScreen. Saved active; the
+        /// 최단 시간 (BestTimeRow) and 최소 이동 (BestMovesRow), and 다시 도전 (RetryButton). Values ("Value" children) are
+        /// written by ShelfResultScreen. Saved active; the
         /// scene instance is placed inactive.
         /// </summary>
         public static GameObject BuildShelfResultCanvas()
@@ -60,15 +60,9 @@ namespace WordRoom.EditorTools
             Vertical(panel, 16f, 48, TextAnchor.UpperCenter);
             var title = AddText(panel, "Title", "목표 도달", 56f, ArchiveUi.Ivory, TextAlignmentOptions.Center);
             Size(title.gameObject, width, 80f);
-            ShelfResultRow(panel, "TimeRow", "소요 시간", "00:00", width);
+            ShelfResultRow(panel, "TimeRow", "소요 시간", "00:00.00", width);
             ShelfResultRow(panel, "MovesRow", "이동 횟수", "0회", width);
-            var pathLabel = AddText(panel, "PathLabel", "지나온 단어", 26f, ArchiveUi.IvoryDim, TextAlignmentOptions.Left);
-            Size(pathLabel.gameObject, width, 40f);
-            var path = AddText(panel, "PathText", "시작 → 목표", 26f, ArchiveUi.Ivory, TextAlignmentOptions.TopLeft);
-            Size(path.gameObject, width, -1f);                                 // height follows the wrapped words
-            var gap = NewRect("Gap", panel);
-            Size(gap.gameObject, width, 4f);
-            ShelfResultRow(panel, "BestTimeRow", "최단 시간", "--:--", width);
+            ShelfResultRow(panel, "BestTimeRow", "최단 시간", "--:--.--", width);
             ShelfResultRow(panel, "BestMovesRow", "최소 이동", "--", width);
             var spacer = NewRect("Spacer", panel);
             Size(spacer.gameObject, width, 8f);

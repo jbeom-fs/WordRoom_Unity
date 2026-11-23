@@ -285,7 +285,6 @@ MonoBehaviour:
   canvas: {fileID: 1969020660}
   timeText: {fileID: 1969020666}
   movesText: {fileID: 1969020665}
-  pathText: {fileID: 1969020664}
   bestTimeText: {fileID: 1969020663}
   bestMovesText: {fileID: 1969020662}
   retryButton: {fileID: 1969020661}
@@ -1180,17 +1179,6 @@ MonoBehaviour:
 --- !u!114 &1969020663 stripped
 MonoBehaviour:
   m_CorrespondingSourceObject: {fileID: 2991392124385170321, guid: 311a3f444f231c24d8e9628c6ae4ae44, type: 3}
-  m_PrefabInstance: {fileID: 1969020658}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 0}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
---- !u!114 &1969020664 stripped
-MonoBehaviour:
-  m_CorrespondingSourceObject: {fileID: 784131632722002808, guid: 311a3f444f231c24d8e9628c6ae4ae44, type: 3}
   m_PrefabInstance: {fileID: 1969020658}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 0}

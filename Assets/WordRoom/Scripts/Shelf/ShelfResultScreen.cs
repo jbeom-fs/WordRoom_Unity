@@ -10,8 +10,8 @@ using WordRoom.World;
 namespace WordRoom.Shelf
 {
     /// <summary>
-    /// Goal result of the shelf prototype: 소요 시간, 이동 횟수, the words passed in order, this challenge's personal
-    /// 최단 시간 and 최소 이동 (each marked when this run set it), and 다시 도전. The values are fixed by the demo once,
+    /// Goal result of the shelf prototype: 목표 도달, 소요 시간, 이동 횟수, this challenge's personal 최단 시간 and
+    /// 최소 이동 (each marked when this run set it; times with hundredths), and 다시 도전. The values are fixed by the demo once,
     /// at the goal entry. While shown it alone takes input: the player's input is blocked, the cursor is free and a
     /// full-screen overlay catches clicks (the demo turns the Escape menu off first). 다시 도전 is taken once per showing
     /// (the button is disabled at the press) and raises RetryRequested; the demo then hides this and starts the same
@@ -31,7 +31,6 @@ namespace WordRoom.Shelf
         [SerializeField] Canvas canvas;
         [SerializeField] TextMeshProUGUI timeText;
         [SerializeField] TextMeshProUGUI movesText;
-        [SerializeField] TextMeshProUGUI pathText;
         [SerializeField] TextMeshProUGUI bestTimeText;
         [SerializeField] TextMeshProUGUI bestMovesText;
         [SerializeField] Button retryButton;
@@ -68,7 +67,6 @@ namespace WordRoom.Shelf
             ArchiveUi.Need(canvas, nameof(canvas), ref missing);
             ArchiveUi.Need(timeText, nameof(timeText), ref missing);
             ArchiveUi.Need(movesText, nameof(movesText), ref missing);
-            ArchiveUi.Need(pathText, nameof(pathText), ref missing);
             ArchiveUi.Need(bestTimeText, nameof(bestTimeText), ref missing);
             ArchiveUi.Need(bestMovesText, nameof(bestMovesText), ref missing);
             ArchiveUi.Need(retryButton, nameof(retryButton), ref missing);
@@ -80,15 +78,14 @@ namespace WordRoom.Shelf
         void OnDestroy() => ArchiveUi.Unbind(bindings);
 
         /// <summary>Shows one fixed result; false (nothing taken over) when the screen cannot be used.</summary>
-        public bool Show(double seconds, int moves, IReadOnlyList<string> words, ShelfRecords.Best best, bool newTime, bool newMoves)
+        public bool Show(double seconds, int moves, ShelfRecords.Best best, bool newTime, bool newMoves)
         {
             if (!ready || shown || !isActiveAndEnabled) return false;
             var missing = Missing();
             if (missing != null) return Unusable($"참조가 비어 있음: {missing}");
-            timeText.text = ResultScreen.FormatTime(seconds);
+            timeText.text = FormatTime(seconds);
             movesText.text = $"{moves}회";
-            pathText.text = string.Join(" → ", words);
-            bestTimeText.text = best.HasTime ? ResultScreen.FormatTime(best.Seconds) + (newTime ? "  (새 기록)" : "") : "--:--";
+            bestTimeText.text = best.HasTime ? FormatTime(best.Seconds) + (newTime ? "  (새 기록)" : "") : "--:--.--";
             bestMovesText.text = best.HasMoves ? $"{best.Moves}회" + (newMoves ? "  (새 기록)" : "") : "--";
             var wasActive = display.activeSelf;
             if (!wasActive) display.SetActive(true);
@@ -104,6 +101,21 @@ namespace WordRoom.Shelf
             shown = true;
             ArchiveUi.Select(retryButton.gameObject);
             return true;
+        }
+
+        /// <summary>
+        /// Shelf result time with hundredths, always two digits after the point: MM:SS.cc below an hour, else
+        /// HH:MM:SS.cc (18.4 → 00:18.40, 3723.45 → 01:02:03.45). Rounded to the nearest hundredth so a best kept as a
+        /// float in PlayerPrefs (18.4 → 18.39999…) shows the same digits; only the display, never the comparison.
+        /// </summary>
+        public static string FormatTime(double seconds)
+        {
+            var total = seconds > 0d ? (long)Math.Round(seconds * 100d, MidpointRounding.AwayFromZero) : 0L;
+            var cs = total % 100;
+            var s = total / 100 % 60;
+            var m = total / 6000 % 60;
+            var h = total / 360000;
+            return h > 0 ? $"{h:00}:{m:00}:{s:00}.{cs:00}" : $"{m:00}:{s:00}.{cs:00}";
         }
 
         bool Unusable(string reason)

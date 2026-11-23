@@ -371,7 +371,7 @@ namespace WordRoom.Shelf
                 pauseMenu.Close();
                 pauseMenu.enabled = false;                   // no Escape menu over the result
             }
-            if (resultScreen != null && resultScreen.Show(seconds, moves, pathWords, best, newTime, newMoves)) return;
+            if (resultScreen != null && resultScreen.Show(seconds, moves, best, newTime, newMoves)) return;
             if (pauseMenu != null) pauseMenu.enabled = true;
         }
 

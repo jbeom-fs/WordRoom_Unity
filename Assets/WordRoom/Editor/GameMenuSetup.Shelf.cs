@@ -38,7 +38,6 @@ namespace WordRoom.EditorTools
             new Link("canvas", "", typeof(Canvas)),
             new Link("timeText", "Result/TimeRow/Value", typeof(TMPro.TextMeshProUGUI)),
             new Link("movesText", "Result/MovesRow/Value", typeof(TMPro.TextMeshProUGUI)),
-            new Link("pathText", "Result/PathText", typeof(TMPro.TextMeshProUGUI)),
             new Link("bestTimeText", "Result/BestTimeRow/Value", typeof(TMPro.TextMeshProUGUI)),
             new Link("bestMovesText", "Result/BestMovesRow/Value", typeof(TMPro.TextMeshProUGUI)),
             new Link("retryButton", "Result/RetryButton", typeof(Button)),
