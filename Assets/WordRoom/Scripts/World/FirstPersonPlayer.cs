@@ -263,16 +263,23 @@ namespace WordRoom.World
         /// This player's own colliders, triggers and the Ignore Raycast layer (door passage blocks) are skipped;
         /// any other first hit (wall, sign, floor) hides the doors behind it.
         /// </summary>
-        public bool TryGetAimedDoor(float maxDistance, out DoorView door)
+        public bool TryGetAimedDoor(float maxDistance, out DoorView door) => TryGetAimed(maxDistance, out door);
+
+        /// <summary>
+        /// The component T on (or above) the first valid obstacle on the screen-center ray within `maxDistance`, with
+        /// the same rules as TryGetAimedDoor: own colliders, triggers and Ignore Raycast are skipped, and any other
+        /// first hit hides what is behind it.
+        /// </summary>
+        public bool TryGetAimed<T>(float maxDistance, out T target) where T : Component
         {
-            door = null;
+            target = null;
             var eye = view != null ? view : transform;
             RaycastHit? first = null;
             foreach (var h in Physics.RaycastAll(eye.position, eye.forward, maxDistance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
                 if (!h.collider.transform.IsChildOf(transform) && (first == null || h.distance < first.Value.distance)) first = h;
             if (first == null) return false;
-            door = first.Value.collider.GetComponentInParent<DoorView>();
-            return door != null;
+            target = first.Value.collider.GetComponentInParent<T>();
+            return target != null;
         }
 
         /// <summary>Nearest non-trigger collider below `point` (from body height above it), never our own.</summary>
