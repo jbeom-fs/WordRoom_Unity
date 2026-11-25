@@ -6,24 +6,21 @@ using WordRoom.Data;
 namespace WordRoom.Shelf
 {
     /// <summary>
-    /// Which rooms (headword + sense) can be left again, decided once for the whole dictionary package, so door
-    /// placement and destination choice use the same result.
-    /// A door candidate is a package word within the top `vocabularyLimit`, at least `minLength` long, not restricted,
-    /// with a definition. A room's door words are the candidates in its definition minus its own headword, limited to
-    /// its room setting's selection, one per headword. A room is valid when it is a goal room (any sense of the goal
-    /// headword) or at least one of its door
-    /// words is valid; a door word is valid when at least one of its senses is a valid room. Computed as the largest
-    /// such set: every room starts valid and rooms with no valid door word are removed until nothing changes (a removal
-    /// can invalidate a word and then the rooms linking only to it). Rooms that only link among themselves in a loop
-    /// stay valid, since each of them has an exit. Each room is removed at most once, so it always ends.
-    /// Behind a valid door word, each dictionary entry (EntryId) with a valid sense is one destination: its
-    /// representative is the first valid sense among the room settings' senses of that entry, then the fork settings'
-    /// senses, then the entry's senses in dictionary order. Entries without a valid sense are left out.
+    /// Which headword rooms can be left again, decided once for the whole dictionary package, so the links shown in
+    /// the reading screen and the rooms they lead to use the same result.
+    /// A link candidate is a package word within the top `vocabularyLimit`, at least `minLength` long, not restricted,
+    /// with a definition. A sense's link words are the candidates in its definition minus its own headword, limited to
+    /// its link setting's selection, one per headword (first place). A headword room is one room for all of its senses:
+    /// its exits are the link words of every sense together. A room is valid when it is the goal headword or at least
+    /// one of its exits is a valid room. Computed as the largest such set: every room starts valid and rooms with no
+    /// valid exit are removed until nothing changes (a removal can leave the rooms linking only to it without an exit).
+    /// Rooms that only link among themselves in a loop stay valid, since each of them has an exit. Each room is removed
+    /// at most once, so it always ends. A link word is shown as a link only when its room is valid.
     /// Built on a worker thread (the dataset is read only) and cancellable; use it from one thread at a time afterwards.
     /// </summary>
     internal sealed class ShelfLinkGraph
     {
-        /// <summary>Room setting snapshot: a senseId (null: every sense of the word without its own setting) and its selection (null: all).</summary>
+        /// <summary>Link setting snapshot: a senseId (null: every sense of the word without its own setting) and its selection (null: all).</summary>
         public sealed class RoomRule
         {
             public string Word;
@@ -35,36 +32,30 @@ namespace WordRoom.Shelf
         readonly int limit;
         readonly int minLength;
         readonly List<RoomRule> roomRules;
-        readonly Dictionary<string, List<string>> forkSenses;   // word → senseIds named in the fork settings
-        readonly string goalWord;                              // every sense of it is a goal room
+        readonly string goalWord;                              // its room is valid without an exit
         readonly Dictionary<string, int> candidates = new Dictionary<string, int>();  // surface → rank, or -1
         readonly Dictionary<string, bool> entries = new Dictionary<string, bool>();   // surface → registered headword
-        readonly bool[] valid;
-        readonly int[] exits;
-        readonly int[] validSenses;
+        readonly bool[] valid;                                 // by word rank
 
         public int RoomCount { get; private set; }
         public int RemovedCount { get; private set; }
 
         /// <param name="cancel">Checked while walking the room candidates and while removing rooms; throws OperationCanceledException.</param>
         public ShelfLinkGraph(WordRoomDataset dataset, int vocabularyLimit, int minLength, List<RoomRule> roomRules,
-            Dictionary<string, List<string>> forkSenses, string goalWord, CancellationToken cancel)
+            string goalWord, CancellationToken cancel)
         {
             d = dataset;
             limit = vocabularyLimit;
             this.minLength = minLength;
             this.roomRules = roomRules;
-            this.forkSenses = forkSenses;
             this.goalWord = goalWord;
-            valid = new bool[d.SenseCount];
-            exits = new int[d.SenseCount];
-            validSenses = new int[d.WordCount];
+            valid = new bool[d.WordCount];
             Build(cancel);
         }
 
         // ---- candidates ----------------------------------------------------------------------------------------------
 
-        /// <summary>A door candidate surface (exact package surface meeting the vocabulary rules).</summary>
+        /// <summary>A link candidate surface (exact package surface meeting the vocabulary rules).</summary>
         public bool IsCandidate(string surface) => CandidateRank(surface) >= 0;
 
         /// <summary>
@@ -80,8 +71,8 @@ namespace WordRoom.Shelf
         }
 
         /// <summary>
-        /// The one extraction used everywhere (graph, room layout, link log): split on headwords with the split exceptions
-        /// of the room `senseId`, then keep door candidates.
+        /// The one extraction used everywhere (graph, reading text, link log): split on headwords with the split
+        /// exceptions of the sense `senseId`, then keep link candidates.
         /// </summary>
         public List<ShelfTextPart> Extract(string displayDefinition, string senseId) =>
             ShelfLinkText.FindCandidates(displayDefinition, senseId, IsEntry, IsCandidate);
@@ -107,7 +98,7 @@ namespace WordRoom.Shelf
             return false;
         }
 
-        /// <summary>Why a surface is no door candidate, or null when it is one.</summary>
+        /// <summary>Why a surface is no link candidate, or null when it is one.</summary>
         public string WhyNotCandidate(string surface)
         {
             if (!d.TryGetWordRank(surface, out var rank) || d.GetWord(rank) != surface) return "사전 패키지에 없는 표기";
@@ -117,7 +108,7 @@ namespace WordRoom.Shelf
             return HasDefinition(rank) ? null : "뜻풀이 없음";
         }
 
-        /// <summary>The room setting of a sense: the one with its senseId, else one of the word without a senseId.</summary>
+        /// <summary>The link setting of a sense: the one with its senseId, else one of the word without a senseId.</summary>
         public RoomRule RuleOf(string word, string senseId)
         {
             RoomRule fallback = null;
@@ -131,11 +122,11 @@ namespace WordRoom.Shelf
         }
 
         /// <summary>
-        /// Door words of a sense before validity: candidates of its display definition (Han parentheses removed, see
+        /// Link words of a sense before validity: candidates of its display definition (Han parentheses removed, see
         /// ShelfLinkText.DisplayDefinition; positions are offsets in it) minus its own headword, selection applied,
         /// first place each.
         /// </summary>
-        List<ShelfTextPart> CandidateDoors(SenseInfo sense)
+        List<ShelfTextPart> CandidateLinks(SenseInfo sense)
         {
             var list = new List<ShelfTextPart>();
             if (string.IsNullOrEmpty(sense.Definition)) return list;
@@ -154,84 +145,70 @@ namespace WordRoom.Shelf
 
         void Build(CancellationToken cancel)
         {
-            var doorsOf = new int[d.SenseCount][];
-            var linkedFrom = new List<int>[d.WordCount];     // door word rank → rooms that have it as a door word
+            var exits = new int[d.WordCount];                 // distinct valid exit words of each room
+            var linkedFrom = new List<int>[d.WordCount];     // exit word rank → rooms that have it as an exit (each once)
             var end = Math.Min(limit, d.WordCount);
-            var goalRank = goalWord != null && d.TryGetWordRank(goalWord, out var g) ? g : -1;
+            var goalRank = GoalRank();
+            var targets = new HashSet<int>();
             for (var rank = 0; rank < d.WordCount; rank++)
             {
                 cancel.ThrowIfCancellationRequested();
                 if (rank >= end && rank != goalRank) continue;
                 if (rank != goalRank && !IsCandidateRank(rank)) continue;
+                targets.Clear();
                 foreach (var row in d.GetSenseRows(rank))
-                {
-                    var sense = d.GetSense(row);
-                    if (string.IsNullOrEmpty(sense.Definition)) continue;
-                    var doors = CandidateDoors(sense);
-                    var ranks = new int[doors.Count];
-                    for (var i = 0; i < doors.Count; i++)
-                    {
-                        ranks[i] = CandidateRank(doors[i].Target);
-                        (linkedFrom[ranks[i]] ??= new List<int>()).Add(row);
-                    }
-                    doorsOf[row] = ranks;
-                    valid[row] = true;
-                    exits[row] = ranks.Length;
-                    validSenses[rank]++;
-                    RoomCount++;
-                }
+                    foreach (var c in CandidateLinks(d.GetSense(row)))
+                        targets.Add(CandidateRank(c.Target));
+                foreach (var t in targets) (linkedFrom[t] ??= new List<int>()).Add(rank);
+                exits[rank] = targets.Count;
+                valid[rank] = true;
+                RoomCount++;
             }
+            // Every link word is a candidate, so it is in the room set above: all exits start valid.
 
             var queue = new Queue<int>();
-            for (var row = 0; row < valid.Length; row++)
+            for (var rank = 0; rank < valid.Length; rank++)
             {
-                if ((row & 4095) == 0) cancel.ThrowIfCancellationRequested();
-                if (valid[row] && exits[row] == 0 && !IsGoal(row)) Remove(row, queue);
+                if ((rank & 4095) == 0) cancel.ThrowIfCancellationRequested();
+                if (valid[rank] && exits[rank] <= 0 && rank != goalRank) Remove(rank, queue);
             }
             while (queue.Count > 0)
             {
                 cancel.ThrowIfCancellationRequested();
-                var word = d.WordOfSense(queue.Dequeue());
-                if (--validSenses[word] > 0 || linkedFrom[word] == null) continue;
-                foreach (var room in linkedFrom[word])        // the word lost its last valid sense: its door is gone
-                    if (valid[room] && --exits[room] == 0 && !IsGoal(room)) Remove(room, queue);
+                var word = queue.Dequeue();
+                if (linkedFrom[word] == null) continue;
+                foreach (var room in linkedFrom[word])        // the word's room is gone: its links are no exits
+                    if (valid[room] && --exits[room] <= 0 && room != goalRank) Remove(room, queue);
             }
         }
 
-        void Remove(int row, Queue<int> queue)
+        void Remove(int rank, Queue<int> queue)
         {
-            valid[row] = false;
+            valid[rank] = false;
             RemovedCount++;
-            queue.Enqueue(row);
+            queue.Enqueue(rank);
         }
 
-        /// <summary>A sense of the goal headword (any SenseId): kept as a destination even without an exit.</summary>
-        public bool IsGoal(int row) => goalWord != null && d.GetSense(row).Word == goalWord;
+        int GoalRank() => goalWord != null && d.TryGetWordRank(goalWord, out var g) && d.GetWord(g) == goalWord ? g : -1;
 
-        /// <summary>A room that can be entered as a destination (has an exit, or is a goal room).</summary>
-        public bool IsValid(int row) => row >= 0 && row < valid.Length && valid[row];
-
-        /// <summary>Number of valid door words of a sense (also for rooms outside the graph, such as a start room).</summary>
-        public int ExitCount(int row) => Doors(row).Count;
-
-        /// <summary>A door word with at least one valid sense behind it.</summary>
+        /// <summary>A link word whose headword room can be entered (it has an exit, or it is the goal).</summary>
         public bool IsValidDoor(string surface)
         {
             var rank = CandidateRank(surface);
-            return rank >= 0 && validSenses[rank] > 0;
+            return rank >= 0 && valid[rank];
         }
 
-        /// <summary>The doors of a sense's room (offsets in its display definition): its candidate door words that are valid doors, first place each.</summary>
+        /// <summary>The links of a sense (offsets in its display definition): its candidate links that lead to a valid room, first place each.</summary>
         public List<ShelfTextPart> Doors(int row)
         {
-            var doors = CandidateDoors(d.GetSense(row));
-            doors.RemoveAll(c => !IsValidDoor(c.Target));
-            return doors;
+            var links = CandidateLinks(d.GetSense(row));
+            links.RemoveAll(c => !IsValidDoor(c.Target));
+            return links;
         }
 
-        // ---- destinations --------------------------------------------------------------------------------------------
+        // ---- lecterns ------------------------------------------------------------------------------------------------
 
-        /// <summary>The word's senses with a definition grouped by EntryId, in dictionary order.</summary>
+        /// <summary>The word's senses with a definition grouped by EntryId, in dictionary order (numbered per entry; one lectern per sense with a link).</summary>
         public List<List<int>> EntryGroups(int rank)
         {
             var groups = new List<List<int>>();
@@ -250,43 +227,6 @@ namespace WordRoom.Shelf
                 groups[g].Add(row);
             }
             return groups;
-        }
-
-        /// <summary>
-        /// The entry's representative among its valid senses: room settings' senses first, then fork settings',
-        /// then dictionary order. -1 when no sense of the entry is valid.
-        /// </summary>
-        public int Representative(string surface, List<int> group)
-        {
-            foreach (var r in roomRules)
-                if (r.Word == surface && Pick(group, r.SenseId, out var row)) return row;
-            if (forkSenses.TryGetValue(surface, out var named))
-                foreach (var id in named)
-                    if (Pick(group, id, out var row)) return row;
-            foreach (var row in group)
-                if (valid[row]) return row;
-            return -1;
-        }
-
-        bool Pick(List<int> group, string senseId, out int row)
-        {
-            row = -1;
-            if (senseId == null || !d.TryGetSenseRow(senseId, out var r) || !group.Contains(r) || !valid[r]) return false;
-            row = r;
-            return true;
-        }
-
-        /// <summary>Representative sense rows behind a door of `surface`, one per entry that has a valid sense.</summary>
-        public List<int> Destinations(string surface)
-        {
-            var list = new List<int>();
-            if (!d.TryGetWordRank(surface, out var rank)) return list;
-            foreach (var group in EntryGroups(rank))
-            {
-                var row = Representative(d.GetWord(rank), group);
-                if (row >= 0) list.Add(row);
-            }
-            return list;
         }
     }
 }

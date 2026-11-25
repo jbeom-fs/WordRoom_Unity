@@ -133,6 +133,7 @@ GameObject:
   - component: {fileID: 410000005}
   - component: {fileID: 410000007}
   - component: {fileID: 410000006}
+  - component: {fileID: 410000008}
   m_Layer: 0
   m_Name: ShelfCorridorDemo
   m_TagString: Untagged
@@ -174,7 +175,6 @@ MonoBehaviour:
   hint: {fileID: 410000004}
   status: {fileID: 410000013}
   startWord: "\uC9C0\uAD6C"
-  startSenseId: 278681
   goalWord: "\uBA74\uC801"
   vocabularyLimit: 15000
   doorMinLength: 2
@@ -191,49 +191,52 @@ MonoBehaviour:
   - word: "\uBC14\uB2E4"
     senseId: 331764
     links: []
-  forks:
+  lecternLabels:
   - word: "\uC9C0\uAD6C"
-    branches:
-    - label: "\uD0DC\uC591\uC5D0\uC11C \uC14B\uC9F8\uB85C \uAC00\uAE4C\uC6B4 \uD589\uC131"
-      senseId: 278681
-    - label: "\uC77C\uC815\uD55C \uAE30\uC900\uC73C\uB85C \uB098\uB208 \uB545\uC758
-        \uD55C \uAD6C\uD68D"
-      senseId: 480437
+    senseId: 278681
+    label: "\uD589\uC131"
+  - word: "\uC9C0\uAD6C"
+    senseId: 480437
+    label: "\uB545\uC758 \uAD6C\uD68D"
+  - word: "\uD56D\uAD6C"
+    senseId: 316979
+    label: "\uC5FC\uC804 \uC6C5\uB369\uC774"
+  - word: "\uD56D\uAD6C"
+    senseId: 439232
+    label: "\uBC30\uAC00 \uB4DC\uB098\uB4DC\uB294 \uACF3"
+  - word: "\uD574\uC548"
+    senseId: 317034
+    label: "\uB0AE \uB3D9\uC548"
+  - word: "\uD574\uC548"
+    senseId: 317035
+    label: "\uBC14\uB2E4\uC640 \uC721\uC9C0\uC758 \uACBD\uACC4"
+  - word: "\uD574\uC548"
+    senseId: 317036
+    label: "\uC6C3\uB294 \uC5BC\uAD74"
+  reader: {fileID: 410000008}
   pauseMenu: {fileID: 410000007}
   resultScreen: {fileID: 410000006}
   layout:
-    corridorWidth: 3
-    wallLength: 9
-    entryLength: 1
-    endLength: 1
-    itemGap: 0.12
+    apothem: 4
     wallHeight: 3
     wallThickness: 0.15
-    textCenter: 1.6
-    textSize: 2
-    doorWidth: 1.4
-    passageHeight: 2.1
-    handleHeight: 1.15
-    tunnelLength: 1.5
-    openSeconds: 0.8
-    entryMargin: 0.15
-    hallDepth: 2.5
-    branchGap: 0.3
-    forkLabelSize: 1.4
-    forkLabelHeight: 2.5
-    titleSize: 6
-    panelDepth: 0.04
+    lecternInset: 1
+    lecternSpacing: 1.4
+    cornerMargin: 0.6
+    lecternWidth: 0.8
+    lecternHeight: 1.05
+    titleSize: 5
+    titleHeight: 2.62
     interactDistance: 2.5
-    spawnDepth: 0.7
+    readRange: 1.6
   materials:
     wall: {fileID: 2100000, guid: 766b149b2f37a434187368f500a700d9, type: 2}
     floor: {fileID: 2100000, guid: 98e4eb280c189f94da42076b1dd2af9d, type: 2}
-    panel: {fileID: 2100000, guid: 7e62e17207ed9dd4495dc5dc065e880f, type: 2}
-    handle: {fileID: 2100000, guid: ddb5ea6782ac56940b9efbf034c09879, type: 2}
-    door: {fileID: 2100000, guid: ac5d3a41107cf9942b9681119748f21e, type: 2}
+    lectern: {fileID: 2100000, guid: 7e62e17207ed9dd4495dc5dc065e880f, type: 2}
+    trim: {fileID: 2100000, guid: ddb5ea6782ac56940b9efbf034c09879, type: 2}
+    parchment: {fileID: 0}
     textColor: {r: 0.18039216, g: 0.14117648, b: 0.105882354, a: 1}
     linkColor: {r: 0.9490196, g: 0.76862746, b: 0.42745098, a: 1}
-    titleColor: {r: 0.94509804, g: 0.9019608, b: 0.8117647, a: 1}
 --- !u!114 &410000004
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -305,6 +308,31 @@ MonoBehaviour:
   settingsButton: {fileID: 577961902}
   mainMenuButton: {fileID: 577961901}
   quitButton: {fileID: 577961900}
+  reader: {fileID: 410000008}
+--- !u!114 &410000008
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 410000001}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fc301c85d20e41d0b2e330c0f7587467, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: WordRoom.Shelf::WordRoom.Shelf.ShelfReader
+  player: {fileID: 410000024}
+  display: {fileID: 410000072}
+  canvas: {fileID: 410000073}
+  titleText: {fileID: 410000074}
+  subtitleText: {fileID: 410000075}
+  bodyText: {fileID: 410000076}
+  scroll: {fileID: 410000077}
+  noticeText: {fileID: 410000078}
+  closeButton: {fileID: 410000079}
+  linkColor: {r: 0.54901963, g: 0.2901961, b: 0.078431375, a: 1}
+  hoverColor: {r: 0.6901961, g: 0.32156864, b: 0, a: 1}
+  hoverGlow: {r: 0.9490196, g: 0.72156864, b: 0.2901961, a: 0.3764706}
 --- !u!1 &410000011
 GameObject:
   m_ObjectHideFlags: 0
@@ -1208,6 +1236,103 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
+--- !u!1001 &410000071
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 8550999189650215263, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+      propertyPath: m_Name
+      value: ShelfReaderCanvas
+      objectReference: {fileID: 0}
+    - target: {fileID: 8550999189650215263, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+      propertyPath: m_IsActive
+      value: 0
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+--- !u!1 &410000072 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 8550999189650215263, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+--- !u!223 &410000073 stripped
+Canvas:
+  m_CorrespondingSourceObject: {fileID: 5272085605032644662, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &410000074 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 6828190413569237856, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
+--- !u!114 &410000075 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 2195549178981426203, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
+--- !u!114 &410000076 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 4023489776384339479, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
+--- !u!114 &410000077 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 7284671722742521037, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4a7652c2617d43d3bc4dab28aa857972, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: WordRoom.Shelf::WordRoom.Shelf.ShelfScrollRect
+--- !u!114 &410000078 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 3388774087377329510, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
+--- !u!114 &410000079 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 1249143703223243517, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4e29b1a8efbd4b44bb3f3716e73f07ff, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Button
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -1220,3 +1345,4 @@ SceneRoots:
   - {fileID: 577961898}
   - {fileID: 1969020658}
   - {fileID: 1705179245}
+  - {fileID: 410000071}

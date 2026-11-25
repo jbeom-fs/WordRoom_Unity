@@ -4,44 +4,27 @@ using UnityEngine;
 namespace WordRoom.Shelf
 {
     /// <summary>
-    /// One built corridor room. Origin at the entrance (inner face of the entrance wall), corridor toward local +Z,
-    /// interior X within ±HalfWidth and Z within 0..Length. Rooms reached through a passage also own the connecting
-    /// passage behind their entrance; its far end is sealed once the player has entered (the previous room is gone).
+    /// One built reading room: an octagon centered on this object (floor top at local Y 0), one lectern per document
+    /// of its headword in document order.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class ShelfRoomView : MonoBehaviour
     {
-        readonly List<ShelfPassage> passages = new List<ShelfPassage>();
-        GameObject entranceSeal;
+        ShelfLectern[] lecterns;
 
-        public ShelfEntry Room { get; private set; }
-        public float Length { get; private set; }
-        public float HalfWidth { get; private set; }
+        public ShelfWordRoom Room { get; private set; }
+        /// <summary>Center to the inner wall face.</summary>
+        public float Apothem { get; private set; }
+        /// <summary>The floor box, centered under the room center (the player is placed on it).</summary>
         public Transform Floor { get; private set; }
-        public IReadOnlyList<ShelfPassage> Passages => passages;
+        public IReadOnlyList<ShelfLectern> Lecterns => lecterns;
 
-        internal void Init(ShelfEntry room, float length, float halfWidth, Transform floor, GameObject entranceSeal)
+        internal void Init(ShelfWordRoom room, float apothem, Transform floor, ShelfLectern[] lecterns)
         {
             Room = room;
-            Length = length;
-            HalfWidth = halfWidth;
+            Apothem = apothem;
             Floor = floor;
-            this.entranceSeal = entranceSeal;
-        }
-
-        internal void Add(ShelfPassage passage) => passages.Add(passage);
-
-        /// <summary>Feet past the entrance by more than `margin` and between the side walls.</summary>
-        public bool HasEntered(Vector3 feet, float margin)
-        {
-            var p = transform.InverseTransformPoint(feet);
-            return p.z > margin && Mathf.Abs(p.x) < HalfWidth;
-        }
-
-        /// <summary>Closes the far end of the connecting passage behind the entrance (no-op for the start room).</summary>
-        public void SealEntrance()
-        {
-            if (entranceSeal != null) entranceSeal.SetActive(true);
+            this.lecterns = lecterns;
         }
     }
 }

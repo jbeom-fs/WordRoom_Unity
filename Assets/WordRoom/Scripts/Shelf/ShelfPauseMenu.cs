@@ -18,7 +18,8 @@ namespace WordRoom.Shelf
     /// free; closing unblocks from the next frame and locks the cursor again only for a placed player. Time is not
     /// paused. The menu is the scene's Shelf Menu Canvas (prefab instance, inactive while closed), saved in the scene
     /// with its references. With incomplete references it reports once and leaves Escape to the player.
-    /// The demo turns this component off while the result screen is shown (no menu over the result).
+    /// The demo turns this component off while the result screen is shown (no menu over the result). While the reading
+    /// screen owns Escape (open, or closed in this frame) the menu ignores the key, so closing a document never opens it.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class ShelfPauseMenu : MonoBehaviour
@@ -36,6 +37,9 @@ namespace WordRoom.Shelf
         [Tooltip("메인으로(이번 시안에서는 비활성)")]
         [SerializeField] Button mainMenuButton;
         [SerializeField] Button quitButton;
+
+        [Tooltip("읽기 화면. 열려 있는 동안(닫힌 프레임 포함) Esc는 읽기 화면만 닫습니다.")]
+        [SerializeField] ShelfReader reader;
 
         readonly List<ButtonBinding> bindings = new List<ButtonBinding>();
         bool ready;
@@ -86,13 +90,14 @@ namespace WordRoom.Shelf
             player.HandlesEscape = false;
             var kb = Keyboard.current;
             if (kb == null || !kb.escapeKey.wasPressedThisFrame) return;
+            if (reader != null && reader.OwnsEscape) return;           // this press closes the document only
             if (open) Close();
             else Open();
         }
 
         public void Open()
         {
-            if (!ready || open || leaving || !isActiveAndEnabled) return;
+            if (!ready || open || leaving || !isActiveAndEnabled || (reader != null && reader.IsOpen)) return;
             open = true;
             menuRoot.SetActive(true);
             player.SetInputBlocked(true);

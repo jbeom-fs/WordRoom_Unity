@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace WordRoom.Shelf
 {
@@ -27,21 +28,22 @@ namespace WordRoom.Shelf
     }
 
     /// <summary>
-    /// Conservative word extraction from a definition, shared by the link graph and the room layout.
+    /// Conservative word extraction from a definition, shared by the link graph and the reading screen.
     /// An eojeol (word unit) is a maximal run of letters and digits; spaces, punctuation and symbols (· % ㎢ …) are
     /// its boundaries, so no candidate ever joins the end of one eojeol to the start of the next ("바다의 경계" never
     /// gives "의경"). An eojeol gives at most one candidate, always from its start:
-    /// 0. a confirmed verb form (모자라는) gives none;
+    /// 0. a confirmed verb form (모자라는) gives none; a counter after a quantity (개의 right after 한, 두, 몇, 여러, a
+    ///    number…, only spaces between: "두 개의" is 개 + 의) gives the counter, which is too short to be a door;
     /// 1. else the whole eojeol, when it is a registered headword ("바다", the noun "에도");
     /// 2. else the headword before one known ending — a particle, a particle combination or a form of the copula
     ///    이다 / 이라… ("바다의" → 바다 + 의, "해안이다" → 해안 + 이다, "공자라는" → 공자 + 라는, "전신이라고도" → 전신 +
     ///    이라고도): endings are tried longest first and the split is fixed at the first one whose remainder is a
-    ///    registered headword. The ending is not part of the link and stays on the wall in its original place.
+    ///    registered headword. The ending is not part of the link and stays plain text in its original place.
     /// Splitting looks only at registered headwords (isEntry); the door conditions (vocabulary, length, restricted
-    /// list: isDoor) are applied afterwards to the one headword chosen, and when it fails the whole eojeol stays wall
+    /// list: isDoor) are applied afterwards to the one headword chosen, and when it fails the whole eojeol stays plain
     /// text with no retry ("길이라는" → 길 + 이라는, 길 has one letter, so no door, and never 길이 + 라는).
     /// Nothing else is cut: no splitting inside an eojeol at other places, no stacked endings, no inflection, so a run
-    /// without its spaces ("바다의경계는") or one with digits or Latin ("43배이다") stays wall text.
+    /// without its spaces ("바다의경계는") or one with digits or Latin ("43배이다") stays plain text.
     /// </summary>
     public static class ShelfLinkText
     {
@@ -158,20 +160,132 @@ namespace WordRoom.Shelf
             var found = new List<ShelfTextPart>();
             if (string.IsNullOrEmpty(definition)) return found;
             var i = 0;
+            string previous = null;                  // the eojeol just before, when only spaces separate it from this one
             while (i < definition.Length)
             {
                 if (!IsWordChar(definition[i]))
                 {
+                    if (!char.IsWhiteSpace(definition[i])) previous = null;   // punctuation breaks the context
                     i++;
                     continue;
                 }
                 var start = i;
                 while (i < definition.Length && IsWordChar(definition[i])) i++;
                 var eojeol = definition.Substring(start, i - start);
-                var word = Headword(eojeol, senseId, isEntry);
+                var word = Headword(eojeol, previous, senseId, isEntry);
+                previous = eojeol;
                 if (word != null && isDoor(word)) found.Add(new ShelfTextPart(word, start, word));
             }
             return found;
+        }
+
+        // ---- quantity context ------------------------------------------------------------------------------------------
+
+        /// <summary>
+        /// Counter forms read as counter + particle right after a quantity eojeol (only spaces between), checked before the
+        /// whole eojeol is taken as a headword: "두 개의" is 개 + 의, never the noun 개의(介意). The counter (one letter) is
+        /// no door, so the eojeol stays plain text as written; no candidate ever spans the space. A 개의 elsewhere is judged
+        /// as usual (per-sense splits list the confirmed 개(dog) + 의 uses).
+        /// </summary>
+        static readonly Dictionary<string, string> CounterForms = new Dictionary<string, string>
+        {
+            { "개의", "개" },
+        };
+
+        /// <summary>Quantity words before a counter: the native numerals and their usual groupings, 몇 and 여러.</summary>
+        static readonly HashSet<string> QuantityWords = new HashSet<string>
+        {
+            "한", "두", "세", "네", "몇", "여러",
+            "다섯", "여섯", "일곱", "여덟", "아홉", "열", "스무",
+            "한두", "두세", "서너", "두어", "대여섯", "예닐곱", "수십", "수백", "수천", "십여", "몇십", "몇백",
+        };
+
+        static readonly string[] Units = { "한", "두", "세", "네", "다섯", "여섯", "일곱", "여덟", "아홉" };
+        static readonly string[] Tens = { "열", "스물", "서른", "마흔", "쉰", "예순", "일흔", "여든", "아흔" };
+
+        /// <summary>
+        /// A quantity before a counter: a listed quantity word, a native tens numeral with or without its unit (열세,
+        /// 마흔다섯), or a number written in digits, optionally with 여 ("10", "40여"; "7,100여" ends in "100여").
+        /// </summary>
+        static bool IsQuantity(string eojeol)
+        {
+            if (string.IsNullOrEmpty(eojeol)) return false;
+            if (QuantityWords.Contains(eojeol)) return true;
+            var digits = eojeol.EndsWith("여", StringComparison.Ordinal) ? eojeol.Length - 1 : eojeol.Length;
+            if (digits > 0)
+            {
+                var all = true;
+                for (var k = 0; k < digits && all; k++) all = eojeol[k] >= '0' && eojeol[k] <= '9';
+                if (all) return true;
+            }
+            foreach (var t in Tens)
+            {
+                if (!eojeol.StartsWith(t, StringComparison.Ordinal)) continue;
+                if (eojeol.Length == t.Length) return true;
+                var rest = eojeol.Substring(t.Length);
+                foreach (var u in Units)
+                    if (rest == u) return true;
+            }
+            return false;
+        }
+
+        // ---- sense number references -----------------------------------------------------------------------------------
+
+        /// <summary>‘「n」’을/를 세는 단위: a counting sense referring to sense n of its own entry (no headword in the quotes).</summary>
+        static readonly Regex SelfUnitReference = new Regex("‘「([0-9]+)」’(을|를)(?= 세는 단위)", RegexOptions.CultureInvariant);
+
+        /// <summary>
+        /// The display definition with each "‘「n」’을 세는 단위" written out with the room's headword ("사람을 세는 단위"),
+        /// 을/를 chosen by the headword's last syllable. Only a reference to another sense of the same entry is replaced:
+        /// n is the sense number within the entry before links are filtered, 1 ≤ n ≤ senseCount and n ≠ the sense's own
+        /// number; a reference naming another headword (‘마음「1」’) or another number stays as written. The dictionary
+        /// text itself is not changed: `links` (found in `definition`) are moved to the new text with the same targets,
+        /// and the inserted headword is plain text. Returns `definition` and `links` unchanged when nothing is replaced.
+        /// </summary>
+        public static string ResolveSelfReferences(string definition, string headword, int number, int senseCount,
+            IReadOnlyList<ShelfTextPart> links, out IReadOnlyList<ShelfTextPart> movedLinks)
+        {
+            movedLinks = links;
+            if (string.IsNullOrEmpty(definition) || string.IsNullOrEmpty(headword) || senseCount < 2 || definition.IndexOf('「') < 0) return definition;
+            var sb = new StringBuilder(definition.Length);
+            var spans = new List<(int Start, int End, int Shift)>();    // replaced ranges of `definition`, shift after each
+            var cursor = 0;
+            var shift = 0;
+            foreach (Match m in SelfUnitReference.Matches(definition))
+            {
+                if (!int.TryParse(m.Groups[1].Value, out var n) || n < 1 || n > senseCount || n == number) continue;
+                var text = headword + ObjectParticle(headword, m.Groups[2].Value);
+                sb.Append(definition, cursor, m.Index - cursor).Append(text);
+                cursor = m.Index + m.Length;
+                shift += text.Length - m.Length;
+                spans.Add((m.Index, cursor, shift));
+            }
+            if (spans.Count == 0) return definition;
+            sb.Append(definition, cursor, definition.Length - cursor);
+
+            var moved = new List<ShelfTextPart>(links.Count);
+            foreach (var link in links)
+            {
+                var offset = 0;
+                var inside = false;
+                foreach (var span in spans)
+                {
+                    if (link.Start + link.Length <= span.Start) break;
+                    if (link.Start < span.End) { inside = true; break; }
+                    offset = span.Shift;
+                }
+                if (!inside) moved.Add(new ShelfTextPart(link.Text, link.Start + offset, link.Target));
+            }
+            movedLinks = moved;
+            return sb.ToString();
+        }
+
+        /// <summary>을 after a final consonant, 를 after a vowel; `fallback` when the last letter is no Hangul syllable.</summary>
+        static string ObjectParticle(string word, string fallback)
+        {
+            var c = word[word.Length - 1];
+            if (c < '가' || c > '힣') return fallback;
+            return (c - '가') % 28 != 0 ? "을" : "를";
         }
 
         // ---- confirmed split exceptions ------------------------------------------------------------------------------
@@ -189,11 +303,22 @@ namespace WordRoom.Shelf
         {
             { "126851|말과의", "말과" },     // 당나귀 "말과의 포유류."
             { "146729|말과의", "말과" },     // 말 "말과의 포유류."
+            // 개(dog) + 의, and one counter after a variable, with no quantity word before them.
+            { "3402|개의", "개" },           // 강아지 "개의 새끼."
+            { "97555|개의", "개" },          // 구보 "개의 쓸개 속에 든 결석을…"
+            { "120292|개의", "개" },         // 뉴펀들랜드 "개의 한 품종."
+            { "159957|개의", "개" },         // 바둑이 "…또는 그런 개의 이름."
+            { "341533|개의", "개" },         // 구분 "개의 똥."
+            { "378211|개의", "개" },         // 구조 "…주로 개의 몸에 붙어 기생한다."
+            { "451771|개의", "개" },         // 구사 "개의 쓸개 속에 든 결석을…"
+            { "456469|개의", "개" },         // 런던 "…개의 야성과 환경을 다룬…"
+            { "525185|개의", "개" },         // 구간 "개의 간을 한방에서 이르는 말."
+            { "21092|개의", "개" },          // 자유도 "<I>n</I>개의 질점계의…" (counter after a variable)
         };
 
         /// <summary>
         /// Confirmed verb or adjective forms that look like a noun plus an ending (모자라는 = 모자라다, not 모자 + 라는).
-        /// Matched against the whole eojeol before any cut; such an eojeol stays wall text.
+        /// Matched against the whole eojeol before any cut; such an eojeol stays plain text.
         /// </summary>
         static readonly HashSet<string> NotNounForms = new HashSet<string>
         {
@@ -201,7 +326,7 @@ namespace WordRoom.Shelf
         };
 
         /// <summary>
-        /// Eojeols split the same way in every use found in the package: eojeol → headword (the rest stays wall text).
+        /// Eojeols split the same way in every use found in the package: eojeol → headword (the rest stays plain text).
         /// In each, the longest ending starts with the headword's last syllable (결과의: 과의 → 결, 1 letter) and hid it.
         /// </summary>
         static readonly Dictionary<string, string> WordSplits = new Dictionary<string, string>
@@ -259,17 +384,20 @@ namespace WordRoom.Shelf
 
         /// <summary>
         /// The headword an eojeol is split into, decided on registered headwords only (no door conditions):
-        /// 1. a per-room exception for this room's SenseId; 2. a confirmed verb form gives none; 3. an eojeol exception;
-        /// 4. the whole eojeol when it is a headword (even when spelled like an ending, e.g. the noun 에도); 5. else the
+        /// 1. a per-room exception for this room's SenseId; 2. a confirmed verb form gives none; 3. a counter form right
+        /// after a quantity eojeol (`previous`, only spaces between) gives the counter; 4. an eojeol exception;
+        /// 5. the whole eojeol when it is a headword (even when spelled like an ending, e.g. the noun 에도); 6. else the
         /// part before the longest known ending whose remainder is a headword — the split is fixed at that first point
         /// and never retried with a shorter ending (길이라는 → 길 + 이라는, not 길이 + 라는). The caller then applies the
-        /// door conditions to that one headword, so a failing one (길: one letter) leaves the eojeol as wall text.
+        /// door conditions to that one headword, so a failing one (길: one letter) leaves the eojeol as plain text.
         /// </summary>
-        static string Headword(string eojeol, string senseId, Func<string, bool> isEntry)
+        static string Headword(string eojeol, string previous, string senseId, Func<string, bool> isEntry)
         {
             if (senseId != null && SenseSplits.TryGetValue(senseId + "|" + eojeol, out var bySense) && ValidException(eojeol, bySense, isEntry))
                 return bySense;
             if (NotNounForms.Contains(eojeol)) return null;
+            if (CounterForms.TryGetValue(eojeol, out var counter) && IsQuantity(previous) && ValidException(eojeol, counter, isEntry))
+                return counter;
             if (WordSplits.TryGetValue(eojeol, out var byWord) && ValidException(eojeol, byWord, isEntry)) return byWord;
             if (isEntry(eojeol)) return eojeol;
             foreach (var ending in Endings)

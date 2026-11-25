@@ -4,16 +4,18 @@ using UnityEngine;
 namespace WordRoom.Shelf
 {
     /// <summary>
-    /// Personal bests of the shelf prototype, kept locally in PlayerPrefs (like the game settings). One challenge is
-    /// the start room and the goal headword: start headword + SenseId and goal headword, the goal written with the
-    /// former any-sense mark "(*)" so earlier any-sense records keep counting and a run finished through any branch
-    /// (any sense of the goal word) adds to the same record. The shortest time and the fewest moves are compared and
-    /// kept separately (a run may improve one, both or none). Nothing is stored for a challenge until it is finished once.
+    /// Personal bests of the shelf prototype, kept locally in PlayerPrefs (like the game settings). The reading-room
+    /// version keys a challenge by start headword and goal headword under its own version mark (ReadingKey, e.g.
+    /// "lectern1.바다>지구"), so the former corridor records ("바다(331764)>지구(*)", ChallengeKey) stay untouched and are
+    /// no longer written. The shortest time and the fewest moves are compared and kept separately (a run may improve
+    /// one, both or none). Nothing is stored for a challenge until it is finished once.
     /// </summary>
     public static class ShelfRecords
     {
         const string Prefix = "WordRoom.Shelf.Best.";
         const string AnySense = "*";
+        /// <summary>Version mark of the reading-room records (start and goal are headwords).</summary>
+        public const string ReadingVersion = "lectern1";
 
         public readonly struct Best
         {
@@ -31,7 +33,10 @@ namespace WordRoom.Shelf
             }
         }
 
-        /// <summary>"start(SenseId)>goal(*)", the part of the PlayerPrefs keys that tells challenges apart.</summary>
+        /// <summary>"lectern1.start>goal": the reading-room challenge part of the PlayerPrefs keys.</summary>
+        public static string ReadingKey(string startWord, string goalWord) => $"{ReadingVersion}.{startWord}>{goalWord}";
+
+        /// <summary>Former corridor challenge "start(SenseId)>goal(*)" (records kept as they are, no longer written).</summary>
         public static string ChallengeKey(string startWord, string startSense, string goalWord) =>
             $"{startWord}({startSense})>{goalWord}({AnySense})";
 

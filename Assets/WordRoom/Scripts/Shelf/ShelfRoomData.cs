@@ -5,19 +5,19 @@ using UnityEngine;
 namespace WordRoom.Shelf
 {
     /// <summary>
-    /// Settings of one room in the prototype: the headword, the dictionary sense shown in it and the words of that
-    /// sense's definition chosen as links. The text itself always comes from the dictionary package. A setting with a
-    /// senseId applies to that sense's room only; one without applies to the word's default room. A room without
-    /// settings shows its sense with every link candidate (the word's first sense when no sense is given).
+    /// Link selection of one sense in the prototype: the words of that sense's definition used as links. The text
+    /// itself always comes from the dictionary package. A setting with a senseId applies to that sense only; one
+    /// without applies to every sense of the word that has no setting of its own. A sense without settings uses every
+    /// link candidate of its definition.
     /// </summary>
     [Serializable]
     public sealed class ShelfRoom
     {
         [Tooltip("표제어(사전 패키지의 표기)")]
         public string word;
-        [Tooltip("이 방에 보여 줄 뜻의 senseId. 비어 있거나 이 표제어의 뜻이 아니면 첫 뜻을 씁니다. 갈래길 목적지처럼 뜻이 정해진 방에는 senseId가 같은 설정만 적용됩니다.")]
+        [Tooltip("링크 설정을 적용할 뜻의 senseId. 비어 있으면 이 표제어에서 자기 설정이 없는 모든 뜻에 적용합니다.")]
         public string senseId;
-        [Tooltip("이동 링크로 선정할 단어(뜻풀이에 실제로 나오는 문 후보 중에서). 비어 있으면 후보 전부를 링크로 씁니다. 같은 표제어는 처음 나온 자리에만 문을 만들고, 후보가 아닌 단어(한 글자 등)는 벽 글로 남습니다. 여기 지정한 senseId는 그 사전 항목의 대표 뜻이 됩니다.")]
+        [Tooltip("이동 링크로 선정할 단어(그 뜻풀이에 실제로 나오는 링크 후보 중에서). 비어 있으면 후보 전부를 링크로 씁니다. 한 뜻풀이에서 같은 표제어는 처음 유효한 자리에만 링크를 만들고, 후보가 아닌 단어(한 글자 등)는 일반 글로 남습니다.")]
         public List<string> links = new List<string>();
 
         public ShelfRoom() { }
@@ -30,49 +30,34 @@ namespace WordRoom.Shelf
         }
     }
 
-    /// <summary>One way of a homonym fork: the sign on its wall and the sense whose room it leads to.</summary>
-    [Serializable]
-    public sealed class ShelfBranch
-    {
-        [Tooltip("갈래 벽에 표시할 짧은 뜻 안내. 비어 있으면 뜻풀이 앞부분을 씁니다.")]
-        public string label;
-        [Tooltip("이 갈래 목적지 방의 senseId(갈림길 표제어의 뜻이어야 합니다)")]
-        public string senseId;
-
-        public ShelfBranch() { }
-
-        public ShelfBranch(string label, string senseId)
-        {
-            this.label = label;
-            this.senseId = senseId;
-        }
-    }
-
     /// <summary>
-    /// Optional hints for a homonym fork. The fork itself comes from the dictionary: one branch per entry (EntryId) of
-    /// the headword, and a headword with a single entry links straight to its room. A branch setting here only names
-    /// the representative sense of the entry it belongs to (after the room settings) and that branch's sign.
+    /// Short title of one lectern (one sense of a headword), shown after the sense number in the "[E] 읽기" hint and on
+    /// the reading screen. It applies to the lectern of that senseId only. Lecterns without a setting get a title cut
+    /// from their definition.
     /// </summary>
     [Serializable]
-    public sealed class ShelfFork
+    public sealed class ShelfLecternLabel
     {
-        [Tooltip("갈래 설정을 참고할 표제어")]
+        [Tooltip("표제어")]
         public string word;
-        [Tooltip("갈래 참고 목록. senseId는 그 뜻이 속한 사전 항목의 대표 뜻, label은 그 갈래의 안내 문구가 됩니다. 갈래 수·순서는 사전 항목 기준이며, 표제어에 속하지 않는 senseId는 경고 후 무시합니다.")]
-        public List<ShelfBranch> branches = new List<ShelfBranch>();
+        [Tooltip("짧은 표제를 붙일 뜻의 senseId(그 뜻의 독서대에만 적용)")]
+        public string senseId;
+        [Tooltip("방 중앙에서 읽을 짧은 뜻 표제. 비어 있으면 그 뜻풀이 끝부분을 씁니다.")]
+        public string label;
 
-        public ShelfFork() { }
+        public ShelfLecternLabel() { }
 
-        public ShelfFork(string word, params ShelfBranch[] branches)
+        public ShelfLecternLabel(string word, string senseId, string label)
         {
             this.word = word;
-            this.branches = new List<ShelfBranch>(branches);
+            this.senseId = senseId;
+            this.label = label;
         }
     }
 
     /// <summary>
-    /// Fixed examples. 1: 항구(염전 sense) → 바닷물 → 바다. 2: 바다 → 지구(행성), through the 지구 fork detected
-    /// from its dictionary entries. The fork settings only give the 행성 / 땅의 구획 signs; both examples share them.
+    /// Fixed examples (start headword → goal headword). 바다 → 지구: the 바다 lectern's definition links 지구 once
+    /// (first place), one click. 항구's 염전 sense links only 바닷물, whose definition links 바다.
     /// </summary>
     public static class ShelfExample
     {
@@ -86,58 +71,109 @@ namespace WordRoom.Shelf
 
         public static List<ShelfRoom> Rooms() => new List<ShelfRoom>
         {
-            new ShelfRoom(HarborWord, HarborSense, "바닷물"),          // 염전에서 판에 댈 바닷물을 받는 웅덩이. (판: 한 글자, 벽 글)
+            new ShelfRoom(HarborWord, HarborSense, "바닷물"),          // 염전에서 판에 댈 바닷물을 받는 웅덩이. (판: 한 글자, 일반 글)
             new ShelfRoom("바닷물", "532114", "바다"),                // 바다에 괴어 있는 짠물.
-            new ShelfRoom(SeaWord, SeaSense),                         // every candidate; 지구 twice → one door
+            new ShelfRoom(SeaWord, SeaSense),                         // every candidate; 지구 twice → first place only
         };
 
-        public static List<ShelfFork> Forks() => new List<ShelfFork>
+        public static List<ShelfLecternLabel> Labels() => new List<ShelfLecternLabel>
         {
-            new ShelfFork(EarthWord,
-                new ShelfBranch("태양에서 셋째로 가까운 행성", PlanetSense),
-                new ShelfBranch("일정한 기준으로 나눈 땅의 한 구획", DistrictSense)),
+            new ShelfLecternLabel(EarthWord, PlanetSense, "행성"),
+            new ShelfLecternLabel(EarthWord, DistrictSense, "땅의 구획"),
+            new ShelfLecternLabel(HarborWord, HarborSense, "염전 웅덩이"),
+            new ShelfLecternLabel(HarborWord, "439232", "배가 드나드는 곳"),
+            new ShelfLecternLabel("해안", "317034", "낮 동안"),
+            new ShelfLecternLabel("해안", "317035", "바다와 육지의 경계"),
+            new ShelfLecternLabel("해안", "317036", "웃는 얼굴"),
         };
     }
 
+    /// <summary>The sense of a lectern's document: its display definition cut into plain parts and links in reading order.</summary>
+    public sealed class ShelfSense
+    {
+        public string SenseId { get; }
+        public string Definition { get; }
+        /// <summary>Concatenating every part's Text gives Definition; link parts lead to their Target headword's room.</summary>
+        public IReadOnlyList<ShelfTextPart> Parts { get; }
+
+        public ShelfSense(string senseId, string definition, IReadOnlyList<ShelfTextPart> parts)
+        {
+            SenseId = senseId;
+            Definition = definition;
+            Parts = parts;
+        }
+    }
+
     /// <summary>
-    /// A room's content resolved from the dictionary: the headword, the fixed sense and its definition cut into
-    /// plain-text parts and link parts in reading order (concatenating every part's Text gives the definition).
-    /// Rooms are told apart by Key (headword and sense), so two senses of one word are two rooms.
+    /// What one lectern holds: one sense of the headword that has at least one link, with its dictionary entry
+    /// (EntryId), its number within that entry and the short title. The number is the sense's place among the entry's
+    /// senses with a definition, fixed before links are filtered, so it stays when other senses of the entry get no
+    /// lectern (0 when the entry has a single sense: no number shown).
     /// </summary>
-    public sealed class ShelfEntry
+    public sealed class ShelfDocument
     {
         public string Word { get; }
-        public string SenseId { get; }
-        /// <summary>Dictionary entry (homograph) the sense belongs to; senses of one entry are one fork branch.</summary>
         public string EntryId { get; }
         public string Pos { get; }
-        public string Definition { get; }
-        public IReadOnlyList<ShelfTextPart> Parts { get; }
-        public string Key => KeyOf(Word, SenseId);
-        /// <summary>Number of word doors (exits) of the room.</summary>
-        public int DoorCount
+        /// <summary>1-based number within the entry, or 0 when the entry has one sense.</summary>
+        public int Number { get; }
+        public string Label { get; }
+        public ShelfSense Sense { get; }
+
+        public ShelfDocument(string word, string entryId, string pos, int number, string label, ShelfSense sense)
+        {
+            Word = word;
+            EntryId = entryId;
+            Pos = pos;
+            Number = number;
+            Label = label;
+            Sense = sense;
+        }
+
+        /// <summary>The number and short title shown in the hint and on the reading screen ("2. 땅의 구획" or "행성").</summary>
+        public string Title => Number > 0 ? $"{Number}. {Label}" : Label;
+
+        public string SenseId => Sense.SenseId;
+
+        public int LinkCount
         {
             get
             {
                 var n = 0;
-                foreach (var p in Parts)
+                foreach (var p in Sense.Parts)
                     if (p.IsLink) n++;
                 return n;
             }
         }
-        /// <summary>Headword with the sense, for HUD and logs.</summary>
-        public string Label => $"{Word}({SenseId})";
+    }
 
-        public ShelfEntry(string word, string senseId, string entryId, string pos, string definition, IReadOnlyList<ShelfTextPart> parts)
+    /// <summary>
+    /// A headword's reading room resolved from the dictionary: one document per sense with at least one link, in
+    /// dictionary order (entries in order, senses in order within each: the lectern order). Only the goal room may have
+    /// none. Resolved once per headword and kept, so a revisited room has the same lecterns in the same places.
+    /// </summary>
+    public sealed class ShelfWordRoom
+    {
+        public string Word { get; }
+        public IReadOnlyList<ShelfDocument> Documents { get; }
+
+        public ShelfWordRoom(string word, IReadOnlyList<ShelfDocument> documents)
         {
             Word = word;
-            SenseId = senseId;
-            EntryId = entryId;
-            Pos = pos;
-            Definition = definition;
-            Parts = parts;
+            Documents = documents;
         }
 
-        public static string KeyOf(string word, string senseId) => $"{word}#{senseId}";
+        /// <summary>Distinct headwords reachable by a link anywhere in the room (its exits).</summary>
+        public int ExitCount
+        {
+            get
+            {
+                var set = new HashSet<string>();
+                foreach (var d in Documents)
+                    foreach (var p in d.Sense.Parts)
+                        if (p.IsLink) set.Add(p.Target);
+                return set.Count;
+            }
+        }
     }
 }
