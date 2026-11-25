@@ -176,7 +176,6 @@ MonoBehaviour:
   startWord: "\uC9C0\uAD6C"
   startSenseId: 278681
   goalWord: "\uBA74\uC801"
-  goalSenseId: 148273
   vocabularyLimit: 15000
   doorMinLength: 2
   rooms:

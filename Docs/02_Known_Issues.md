@@ -1,10 +1,10 @@
 # WordRoom — Known Issues
 
-기록·갱신일: **2026-10-31 (한국 시간), 구현 현황 최신화**
+갱신일 **2026-11-23 (한국 시간), 작업 종료**
 
-이번 갱신: **KI-012는 Photon region 문제라는 사용자 추정과 서버 설정 변경 후 현재 재발 없음 보고를 반영했다. 원인 확정·비교 재현 결과는 없으며 재발 시 점검한다.** 진단·수동 새로고침은 유지한다. KI-013·014는 사용자 결정으로 수정 보류, KI-015는 미수정·수정 범위 미합의 상태를 유지한다.
+11월 23일 서가형 타이머의 입력 복구 순서 문제를 KI-016에 추가했다. 10월 31일 갱신 당시 **KI-012는 Photon region 문제라는 사용자 추정과 서버 설정 변경 후 현재 재발 없음 보고를 반영했다. 원인 확정·비교 재현 결과는 없으며 재발 시 점검한다.** 진단·수동 새로고침은 유지한다. KI-013·014는 사용자 결정으로 수정 보류, KI-015는 미수정·수정 범위 미합의 상태를 유지한다.
 
-현재 확인 기준: **HEAD `bf9a164`**. 더블클릭 입장 `1968b2f`, 지도 그림·협동 공유 `170a7e2`, 끼임방지·협동 결과 UI·게스트 시작 숨김 `bf9a164`에 사용자 검증 완료 통보가 있다. 기존 KI-001~011·013~015의 개별 근거·보류·미합의 상태는 유지하며 최신 기능의 확인을 모든 과거 경계 사례 통과로 확대하지 않는다. 재접속·호스트 인계는 현재 구현 범위에서 제외됐다.
+기존 단독·협동의 10월 31일 확인 기준은 **`bf9a164`**다. 더블클릭 입장 `1968b2f`, 지도 그림·협동 공유 `170a7e2`, 끼임방지·협동 결과 UI·게스트 시작 숨김 `bf9a164`에 사용자 검증 완료 통보가 있다. 기존 KI-001~011·013~015의 개별 근거·보류·미합의 상태는 유지하며 최신 기능의 확인을 모든 과거 경계 사례 통과로 확대하지 않는다. 재접속·호스트 인계는 현재 구현 범위에서 제외됐다.
 
 KI-001 최초 기준: **`60d4d3d`**
 
@@ -27,6 +27,7 @@ KI-001 최초 기준: **`60d4d3d`**
 | KI-013 | 수신 포즈 묶음의 같은 시각 기록으로 보간 불연속 | P2 / 코드 검토 / 사용자 결정으로 수정 보류 |
 | KI-014 | 위치 보정 직후에도 일반 전송 간격을 기다림 | P3 / 보고서와 코드 차이 / 사용자 결정으로 수정 보류 |
 | KI-015 | 일부 원격 지도 마커 참조 누락을 경고하지 않음 | P3 / 조건부 구성 문제 / 미수정·수정 범위 미합의 |
+| KI-016 | 서가형 입력 복구 때 타이머 시작이 한 프레임 늦을 수 있음 | P3 / 작업 트리 정적 검토 / 실행 미확인 |
 
 최신 항목들은 에이전트가 실행·자동 재현하지 않았다. 우선순위는 검토 당시 영향 판단이며 모든 사용자 환경에서 발생한다고 단정하지 않는다.
 
@@ -84,11 +85,11 @@ SendPose는 placement 변경을 moved=true로만 취급한다. 초기 배치·�
 
 MapView.RemoteSlots와 MapScreen.BindSlots는 remoteMarkers 배열 길이를 표시 가능한 인원으로 센다. 배열에 null 참조가 있어도 참가자를 해당 슬롯에 배정하고 DrawRemote는 조용히 건너뛴다. 예를 들어 길이는 3이지만 실제 참조가 하나뿐이면 일부 참가자가 표시되지 않아도 슬롯 부족 경고가 없다.
 
-GameMenuSetup.HasRemoteMarkers도 참조 하나만 있으면 true여서 부분 누락을 경고하거나 보완하지 않는다. 추후 유효하고 중복되지 않은 참조 수와 누락 슬롯을 점검하는 보완이 가능하다. 사용자 참조를 임의로 덮어쓰는 정책으로 확대하지 않는다.
+당시 Editor 구성 도구의 `GameMenuSetup.HasRemoteMarkers`도 참조 하나만 있으면 통과했다. 해당 구성 도구는 2026-11-23에 제거됐다. 추후 유효하고 중복되지 않은 참조 수와 누락 슬롯을 점검하는 보완이 가능하다. 사용자 참조를 임의로 덮어쓰는 정책으로 확대하지 않는다.
 
 현재 MapCanvas에는 서로 다른 원격 마커 3개와 참조가 모두 있고 Gameplay가 해당 프리팹을 사용한다. 사용자가 직접 씬에 적용했다고 확인했으므로 "보고서와 달리 자산이 적용됨"은 결함이 아니라 작성/검토 시점 차이다. 기본 구성이 깨졌다는 뜻이나 지도 실행 검증 완료라는 뜻은 아니다.
 
-관련 코드: [MapScreen.cs](../Assets/WordRoom/Scripts/Game/MapScreen.cs)의 `BindSlots`, [MapView.cs](../Assets/WordRoom/Scripts/Game/MapView.cs)의 `RemoteSlots`·`DrawRemote`, [GameMenuSetup.cs](../Assets/WordRoom/Editor/GameMenuSetup.cs)의 `HasRemoteMarkers`·`EnsureMapRemoteMarkers`.
+관련 코드: [MapScreen.cs](../Assets/WordRoom/Scripts/Game/MapScreen.cs)의 `BindSlots`, [MapView.cs](../Assets/WordRoom/Scripts/Game/MapView.cs)의 `RemoteSlots`·`DrawRemote`.
 
 ## KI-001. 주변 준비·입장 API의 취소 확인 누락
 
@@ -288,3 +289,13 @@ WordRoomHud.OnDisable은 Clear로 UI를 제거한다. 하지만 RoomGenerationDe
 관련 코드: [MapView.cs](../Assets/WordRoom/Scripts/Game/MapView.cs)의 `MissingParts`·`UpdateLimits`·`CellFor`, [MapGraphic.cs](../Assets/WordRoom/Scripts/Game/MapGraphic.cs)의 `MaxCellsInRange`.
 
 추후 보완 후보는 용량 계산에 반복·유한값 상한과 실패 결과를 두고, 해가 없는 경우 경고 후 단어 표시를 생략하는 정책이다. 단어 풀의 최소 구성 검사를 함께 고려할 수 있다. **이번에는 문제를 기록하며 코드는 수정하지 않는다.**
+
+## KI-016. 서가형 타이머가 입력 복구보다 한 프레임 늦게 시작할 수 있음
+
+**2026-11-23 / P3 / 작업 트리 코드 읽기 / 실행 순서 미확인.**
+
+로딩 중 열린 메뉴를 닫거나 결과 화면에서 `다시 도전`을 누르면, 다음 프레임에 `FirstPersonPlayer.Update`가 커서를 다시 잠그고 걷기 입력을 처리할 수 있다. 같은 프레임에서 `ShelfCorridorDemo.Update`가 먼저 실행되면 `TryStartTimer`가 아직 열린 커서 상태를 보고 시작을 미룬다. 두 컴포넌트의 실행 순서는 지정되어 있지 않으므로 이 순서에서는 타이머가 이동 입력보다 한 프레임 늦게 시작한다.
+
+로딩·첫 조작 전 메뉴 대기를 기록에서 빼고, 계측이 시작된 뒤의 메뉴 대기를 포함하는 동작은 별개의 기준이다.
+
+관련 코드 [ShelfCorridorDemo.cs](../Assets/WordRoom/Scripts/Shelf/ShelfCorridorDemo.cs)의 `Update`·`TryStartTimer`와 [FirstPersonPlayer.cs](../Assets/WordRoom/Scripts/World/FirstPersonPlayer.cs)의 `SetInputBlocked`·`Update`.

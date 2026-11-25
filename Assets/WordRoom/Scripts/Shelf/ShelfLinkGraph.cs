@@ -10,7 +10,8 @@ namespace WordRoom.Shelf
     /// placement and destination choice use the same result.
     /// A door candidate is a package word within the top `vocabularyLimit`, at least `minLength` long, not restricted,
     /// with a definition. A room's door words are the candidates in its definition minus its own headword, limited to
-    /// its room setting's selection, one per headword. A room is valid when it is a goal room or at least one of its door
+    /// its room setting's selection, one per headword. A room is valid when it is a goal room (any sense of the goal
+    /// headword) or at least one of its door
     /// words is valid; a door word is valid when at least one of its senses is a valid room. Computed as the largest
     /// such set: every room starts valid and rooms with no valid door word are removed until nothing changes (a removal
     /// can invalidate a word and then the rooms linking only to it). Rooms that only link among themselves in a loop
@@ -35,8 +36,7 @@ namespace WordRoom.Shelf
         readonly int minLength;
         readonly List<RoomRule> roomRules;
         readonly Dictionary<string, List<string>> forkSenses;   // word → senseIds named in the fork settings
-        readonly string goalWord;
-        readonly string goalSense;                             // null: any sense of goalWord
+        readonly string goalWord;                              // every sense of it is a goal room
         readonly Dictionary<string, int> candidates = new Dictionary<string, int>();  // surface → rank, or -1
         readonly Dictionary<string, bool> entries = new Dictionary<string, bool>();   // surface → registered headword
         readonly bool[] valid;
@@ -48,7 +48,7 @@ namespace WordRoom.Shelf
 
         /// <param name="cancel">Checked while walking the room candidates and while removing rooms; throws OperationCanceledException.</param>
         public ShelfLinkGraph(WordRoomDataset dataset, int vocabularyLimit, int minLength, List<RoomRule> roomRules,
-            Dictionary<string, List<string>> forkSenses, string goalWord, string goalSense, CancellationToken cancel)
+            Dictionary<string, List<string>> forkSenses, string goalWord, CancellationToken cancel)
         {
             d = dataset;
             limit = vocabularyLimit;
@@ -56,7 +56,6 @@ namespace WordRoom.Shelf
             this.roomRules = roomRules;
             this.forkSenses = forkSenses;
             this.goalWord = goalWord;
-            this.goalSense = goalSense;
             valid = new bool[d.SenseCount];
             exits = new int[d.SenseCount];
             validSenses = new int[d.WordCount];
@@ -206,11 +205,8 @@ namespace WordRoom.Shelf
             queue.Enqueue(row);
         }
 
-        public bool IsGoal(int row)
-        {
-            var sense = d.GetSense(row);
-            return sense.Word == goalWord && (goalSense == null || sense.SenseId == goalSense);
-        }
+        /// <summary>A sense of the goal headword (any SenseId): kept as a destination even without an exit.</summary>
+        public bool IsGoal(int row) => goalWord != null && d.GetSense(row).Word == goalWord;
 
         /// <summary>A room that can be entered as a destination (has an exit, or is a goal room).</summary>
         public bool IsValid(int row) => row >= 0 && row < valid.Length && valid[row];

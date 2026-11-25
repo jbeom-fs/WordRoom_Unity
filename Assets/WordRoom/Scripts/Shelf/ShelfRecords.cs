@@ -5,9 +5,10 @@ namespace WordRoom.Shelf
 {
     /// <summary>
     /// Personal bests of the shelf prototype, kept locally in PlayerPrefs (like the game settings). One challenge is
-    /// the start room and the goal: start headword + SenseId, goal headword + SenseId, or "*" for a goal of any sense
-    /// (뜻 무관), so that is a challenge of its own. The shortest time and the fewest moves are compared and kept
-    /// separately (a run may improve one, both or none). Nothing is stored for a challenge until it is finished once.
+    /// the start room and the goal headword: start headword + SenseId and goal headword, the goal written with the
+    /// former any-sense mark "(*)" so earlier any-sense records keep counting and a run finished through any branch
+    /// (any sense of the goal word) adds to the same record. The shortest time and the fewest moves are compared and
+    /// kept separately (a run may improve one, both or none). Nothing is stored for a challenge until it is finished once.
     /// </summary>
     public static class ShelfRecords
     {
@@ -30,9 +31,9 @@ namespace WordRoom.Shelf
             }
         }
 
-        /// <summary>"start(SenseId)>goal(SenseId or *)", the part of the PlayerPrefs keys that tells challenges apart.</summary>
-        public static string ChallengeKey(string startWord, string startSense, string goalWord, string goalSense) =>
-            $"{startWord}({startSense})>{goalWord}({(string.IsNullOrEmpty(goalSense) ? AnySense : goalSense)})";
+        /// <summary>"start(SenseId)>goal(*)", the part of the PlayerPrefs keys that tells challenges apart.</summary>
+        public static string ChallengeKey(string startWord, string startSense, string goalWord) =>
+            $"{startWord}({startSense})>{goalWord}({AnySense})";
 
         public static Best Load(string challenge)
         {

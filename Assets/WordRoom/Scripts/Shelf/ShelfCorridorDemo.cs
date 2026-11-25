@@ -27,8 +27,9 @@ namespace WordRoom.Shelf
     /// opening, or anywhere behind it). The current room and the move count change once, when the feet pass one
     /// destination room's entrance by entryMargin: the previous room, the fork and the other branches are removed then
     /// and the connecting passage sealed behind the player. Opening a door or waiting in the passage or the fork keeps
-    /// the current room, and the player can walk back. Entering the goal word's room (of the goal sense, when one is
-    /// set) is success. A room's entry is resolved once and kept, so a revisited room shows the same sense and layout.
+    /// the current room, and the player can walk back. Entering a room of the goal headword (any sense, any fork branch)
+    /// is success. A room's entry is resolved once and kept, so a revisited room shows the same sense and layout.
+    /// The play UI (status, hints) shows headwords only; the logs keep word(SenseId) to tell rooms apart.
     /// Reuses FirstPersonPlayer for walking, look, cursor and E; PlayHint canvases show the aim hint and the status.
     /// </summary>
     [DisallowMultipleComponent]
@@ -54,15 +55,13 @@ namespace WordRoom.Shelf
         [Tooltip("좌상단 상태(시작·목표·현재·이동 횟수·경로)")]
         [SerializeField] PlayHint status;
 
-        [Header("시작·목표 (우클릭 메뉴로 예제 1·2 설정)")]
+        [Header("시작·목표 (우클릭 메뉴로 예제 설정)")]
         [Tooltip("시작 표제어")]
         [SerializeField] string startWord = ShelfExample.SeaWord;
         [Tooltip("시작 방 senseId. 비어 있으면 방 설정의 뜻, 그것도 없으면 첫 뜻.")]
         [SerializeField] string startSenseId = ShelfExample.SeaSense;
-        [Tooltip("목표 표제어")]
+        [Tooltip("목표 표제어. 이 표제어의 방에 실제로 들어가면 뜻(senseId)에 관계없이 완주입니다. 목표 표제어의 방은 출구가 없어도 목적지로 남습니다.")]
         [SerializeField] string goalWord = ShelfExample.EarthWord;
-        [Tooltip("목표 senseId. 지정하면 그 뜻의 방에 들어가야 성공, 비어 있으면 목표 표제어의 어느 뜻 방이든 성공. 목표 방은 출구가 없어도 목적지로 남습니다.")]
-        [SerializeField] string goalSenseId = ShelfExample.PlanetSense;
 
         [Header("문 후보")]
         [Tooltip("문 후보로 쓸 빈도 상위 표제어 수(사전 패키지 순위 기준)")]
@@ -89,10 +88,10 @@ namespace WordRoom.Shelf
         readonly Dictionary<string, ShelfEntry> entries = new Dictionary<string, ShelfEntry>();    // room key → entry
         readonly Dictionary<string, ShelfEntry> requests = new Dictionary<string, ShelfEntry>();   // "word#senseId or empty" → entry or null
         readonly Dictionary<string, Targets> targets = new Dictionary<string, Targets>();
-        readonly List<string> path = new List<string>();         // room labels (word + SenseId) for the HUD
-        readonly List<string> pathWords = new List<string>();    // headwords in order, for the result
+        readonly List<string> pathWords = new List<string>();    // headwords in order (HUD 경로)
         ShelfEntry startEntry;
-        double runStart;                                         // realtime when the run became playable
+        double runStart;                                         // realtime when the run first became playable
+        bool timerStarted;                                       // runStart is set (once per run)
         bool retrying;
         WordRoomDataset dataset;
         Task<ShelfLinkGraph> graphTask;          // the one running computation of this component (null: none)
@@ -107,7 +106,6 @@ namespace WordRoom.Shelf
         bool stopped;
         string startLabel;
         string goalSurface;
-        string goalSense;                        // null: any sense of the goal word
 
         public string CurrentWord => current != null ? current.Room.Word : null;
         public string CurrentSenseId => current != null ? current.Room.SenseId : null;
@@ -117,24 +115,24 @@ namespace WordRoom.Shelf
         void Reset() => ApplyEarthExample();
 
         [ContextMenu("예제 1 설정: 항구 → 바다")]
-        void ApplyHarborExample() => ApplyExample(ShelfExample.HarborWord, ShelfExample.HarborSense, ShelfExample.SeaWord, ShelfExample.SeaSense);
+        void ApplyHarborExample() => ApplyExample(ShelfExample.HarborWord, ShelfExample.HarborSense, ShelfExample.SeaWord);
 
-        [ContextMenu("예제 2 설정: 바다 → 지구(행성)")]
-        void ApplyEarthExample() => ApplyExample(ShelfExample.SeaWord, ShelfExample.SeaSense, ShelfExample.EarthWord, ShelfExample.PlanetSense);
+        [ContextMenu("예제 2 설정: 바다 → 지구")]
+        void ApplyEarthExample() => ApplyExample(ShelfExample.SeaWord, ShelfExample.SeaSense, ShelfExample.EarthWord);
 
         /// <summary>"…70%가 바다이다." in the planet sense: 바다 is a door, 이다 stays wall text.</summary>
         [ContextMenu("예제 3 설정: 지구(행성) → 바다")]
-        void ApplyPlanetExample() => ApplyExample(ShelfExample.EarthWord, ShelfExample.PlanetSense, ShelfExample.SeaWord, ShelfExample.SeaSense);
+        void ApplyPlanetExample() => ApplyExample(ShelfExample.EarthWord, ShelfExample.PlanetSense, ShelfExample.SeaWord);
 
         /// <summary>"…에도 시대에 집대성하였다.": the noun 에도, spelled like the ending 에도, is a door.</summary>
         [ContextMenu("예제 4 설정: 가부키 → 에도")]
-        void ApplyEdoExample() => ApplyExample("가부키", "412174", "에도", "466082");
+        void ApplyEdoExample() => ApplyExample("가부키", "412174", "에도");
 
         /// <summary>해안(317035) "바다와 육지가 맞닿은 부분." → 바다(331764) "…육지 면적의 …" → 면적(148273): 2 moves.</summary>
         [ContextMenu("예제 5 설정: 해안 → 면적")]
-        void ApplyCoastExample() => ApplyExample("해안", "317035", "면적", "148273");
+        void ApplyCoastExample() => ApplyExample("해안", "317035", "면적");
 
-        void ApplyExample(string fromWord, string fromSense, string toWord, string toSense)
+        void ApplyExample(string fromWord, string fromSense, string toWord)
         {
 #if UNITY_EDITOR
             UnityEditor.Undo.RecordObject(this, "서가 시안 예제 설정");
@@ -142,7 +140,6 @@ namespace WordRoom.Shelf
             startWord = fromWord;
             startSenseId = fromSense;
             goalWord = toWord;
-            goalSenseId = toSense;
             rooms = ShelfExample.Rooms();
             forks = ShelfExample.Forks();
 #if UNITY_EDITOR
@@ -210,6 +207,7 @@ namespace WordRoom.Shelf
                 else if (data.TryGetDataset(out var d)) Begin(d);   // rooms only after the dictionary is loaded
                 return;
             }
+            TryStartTimer();                                     // first frame the player can really play
             var entered = EnteredDestination();
             if (entered != null) Enter(openPassage, entered);
             UpdateAim();
@@ -225,17 +223,6 @@ namespace WordRoom.Shelf
                 return;
             }
             goalSurface = d.GetWord(goalRank);
-            goalSense = null;
-            if (!string.IsNullOrWhiteSpace(goalSenseId))
-            {
-                var id = goalSenseId.Trim();
-                if (!SenseOf(goalRank, id, out _))
-                {
-                    Stop($"목표 senseId '{id}'는 '{goalSurface}'의 뜻이 아니거나 뜻풀이가 없습니다");
-                    return;
-                }
-                goalSense = id;
-            }
             ValidateForks();
 
             var rules = new List<ShelfLinkGraph.RoomRule>();
@@ -259,11 +246,11 @@ namespace WordRoom.Shelf
                         if (b != null && !string.IsNullOrWhiteSpace(b.senseId)) list.Add(b.senseId.Trim());
                 }
             int limit = vocabularyLimit, minLength = doorMinLength;
-            string gw = goalSurface, gs = goalSense;
+            var gw = goalSurface;
             CancelGraph();                           // never two computations for one component
             graphCancel = new CancellationTokenSource();
             var token = graphCancel.Token;
-            graphTask = Task.Run(() => new ShelfLinkGraph(d, limit, minLength, rules, forkSenses, gw, gs, token), token);
+            graphTask = Task.Run(() => new ShelfLinkGraph(d, limit, minLength, rules, forkSenses, gw, token), token);
             graphTask.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);   // a dropped task's failure is observed
             SetHint("문 연결 계산 중…");
         }
@@ -292,7 +279,7 @@ namespace WordRoom.Shelf
             foreach (var problem in graph.ExceptionProblems())
                 Debug.LogWarning($"[서가 시안] 분리 예외 '{problem}'는 표제어가 어절 앞부분이 아니거나 사전에 없어 적용하지 않습니다.", this);
             Debug.Log($"[서가 시안] 문 연결 계산: 방 후보 {graph.RoomCount:N0}개 중 출구 없는 방 {graph.RemovedCount:N0}개 제외 " +
-                      $"(상위 {vocabularyLimit:N0}개 · {doorMinLength}글자 이상 · 목표 {GoalLabel} 유지)", this);
+                      $"(상위 {vocabularyLimit:N0}개 · {doorMinLength}글자 이상 · 목표 {goalSurface} 유지)", this);
 
             var reason = GoalUnreachable();
             if (reason != null)
@@ -317,7 +304,7 @@ namespace WordRoom.Shelf
                 return;
             }
 
-            startLabel = start.Label;
+            startLabel = start.Word;                 // play UI shows headwords only
             startEntry = start;
             builder = new ShelfRoomBuilder(layout, materials, font, transform);
             if (!BeginRun(out var failure))
@@ -326,32 +313,45 @@ namespace WordRoom.Shelf
                 return;
             }
             running = true;
-            Debug.Log($"[서가 시안] 시작: {start.Label} → 목표 {GoalLabel} · {Describe(start)}", this);
+            Debug.Log($"[서가 시안] 시작: {start.Label} → 목표 {goalSurface} · {Describe(start)}", this);
         }
 
         /// <summary>
         /// A new run of this challenge: the start room built again from the kept entry (same layout and links), the
-        /// player placed near its entrance, 0 moves, a path of the start room only, and the timer started — from here,
-        /// when the player can play (dictionary loading and the link graph are not counted; an open Escape menu is).
+        /// player placed near its entrance, 0 moves, a path of the start room only, and the timer reset to not started.
+        /// It starts once the player can really play (TryStartTimer), right after the placement or in a later frame.
         /// </summary>
         bool BeginRun(out string failure)
         {
+            timerStarted = false;                                // never the last run's start time
+            runStart = 0d;
             current = builder.Build(startEntry, Vector3.zero, Quaternion.identity, false);
             openPassage = null;
             moves = 0;
             reached = false;
-            path.Clear();
-            path.Add(startEntry.Label);
             pathWords.Clear();
             pathWords.Add(startEntry.Word);
 
             // PlaceAt faces world +Z, which is the start room's corridor; then step back near the entrance.
             var spawn = current.transform.TransformPoint(new Vector3(0f, 0f, Mathf.Min(layout.spawnDepth, current.Length * 0.5f)));
             if (!player.PlaceAt(current.Floor, out failure) || !player.MoveOnto(current.transform, spawn, out failure)) return false;
-            runStart = Time.realtimeSinceStartupAsDouble;
+            TryStartTimer();                                     // playable right away: starts now
             SetHint(null);
             RefreshStatus();
             return true;
+        }
+
+        /// <summary>
+        /// Fixes the run's start time once, at the first moment FirstPersonPlayer.CanTakeInput is true (placed, window
+        /// focused, no menu block and not in the frame it was lifted, walking not locked, cursor locked). Dictionary
+        /// loading, the link graph and an Escape menu kept open over the placement are therefore not counted; once
+        /// started, an Escape menu opened later counts (the start time is never moved). Nothing after the goal.
+        /// </summary>
+        void TryStartTimer()
+        {
+            if (timerStarted || reached || !player.CanTakeInput) return;
+            runStart = Time.realtimeSinceStartupAsDouble;
+            timerStarted = true;
         }
 
         /// <summary>
@@ -361,8 +361,8 @@ namespace WordRoom.Shelf
         /// </summary>
         void Finish()
         {
-            var seconds = Time.realtimeSinceStartupAsDouble - runStart;
-            var challenge = ShelfRecords.ChallengeKey(startEntry.Word, startEntry.SenseId, goalSurface, goalSense);
+            var seconds = timerStarted ? Time.realtimeSinceStartupAsDouble - runStart : 0d;   // fixed at the goal entry
+            var challenge = ShelfRecords.ChallengeKey(startEntry.Word, startEntry.SenseId, goalSurface);
             var best = ShelfRecords.Submit(challenge, seconds, moves, out var newTime, out var newMoves);
             Debug.Log($"[서가 시안] 기록 확정 {challenge}: {seconds:0.0}초 · 이동 {moves}회 · {string.Join(" → ", pathWords)}" +
                       $" (최단 {best.Seconds:0.0}초{(newTime ? " 새 기록" : "")} · 최소 {best.Moves}회{(newMoves ? " 새 기록" : "")})", this);
@@ -401,7 +401,7 @@ namespace WordRoom.Shelf
                     return;
                 }
                 if (pauseMenu != null) pauseMenu.enabled = true;
-                Debug.Log($"[서가 시안] 다시 도전: {startEntry.Label} → 목표 {GoalLabel}", this);
+                Debug.Log($"[서가 시안] 다시 도전: {startEntry.Label} → 목표 {goalSurface}", this);
             }
             finally
             {
@@ -414,7 +414,7 @@ namespace WordRoom.Shelf
             if (reached)
             {
                 if (resultScreen != null && resultScreen.IsShown) SetHint(null);
-                else SetHint($"목표 도달 성공 · {startLabel} → {current.Room.Label} · 이동 {moves}회");
+                else SetHint($"목표 도달 성공 · {startLabel} → {current.Room.Word} · 이동 {moves}회");
                 return;
             }
             if (!player.CanInteract || !player.TryGetAimed(layout.interactDistance, out ShelfHandle handle) ||
@@ -490,7 +490,6 @@ namespace WordRoom.Shelf
             current = room;
             openPassage = null;
             moves++;
-            path.Add(room.Room.Label);
             pathWords.Add(room.Room.Word);
             Destroy(previous.gameObject);
             current.SealEntrance();
@@ -500,31 +499,17 @@ namespace WordRoom.Shelf
             if (reached) Finish();                               // once: a reached run takes no more doors
         }
 
-        bool IsGoal(ShelfEntry e) => e.Word == goalSurface && (goalSense == null || e.SenseId == goalSense);
-
-        string GoalLabel => goalSense != null ? $"{goalSurface}({goalSense})" : $"{goalSurface}(뜻 무관)";
+        /// <summary>The goal is a headword: entering any sense's room of it finishes the run.</summary>
+        bool IsGoal(ShelfEntry e) => e.Word == goalSurface;
 
         /// <summary>
-        /// Null when a goal room can be the destination of a door: the goal word must be a door candidate and, with a
-        /// goal sense, that sense must be its entry's representative (goal rooms always stay valid, but a setting can
-        /// name another sense of the same entry first). Otherwise the reason.
+        /// Null when the goal word can be entered through a door: it must be a door candidate. Every sense of it is a
+        /// goal room (kept valid by the link graph), so each of its dictionary entries is a destination. Otherwise the reason.
         /// </summary>
         string GoalUnreachable()
         {
             var why = graph.WhyNotCandidate(goalSurface);
-            if (why != null) return $"목표 표제어 '{goalSurface}'는 문 후보가 아니어서({why}) 문으로 들어갈 수 없습니다";
-            if (goalSense == null) return null;
-            dataset.TryGetWordRank(goalSurface, out var rank);
-            dataset.TryGetSenseRow(goalSense, out var goalRow);
-            foreach (var group in graph.EntryGroups(rank))
-            {
-                if (!group.Contains(goalRow)) continue;
-                var rep = graph.Representative(goalSurface, group);
-                if (rep == goalRow) return null;
-                var entry = dataset.GetSense(goalRow).EntryId;
-                return $"목표 뜻 {goalSense}는 사전 항목 {entry}의 대표 뜻이 아니라 갈래로 선택될 수 없습니다(현재 대표 뜻 {dataset.GetSenseId(rep)}). 방 설정이나 갈래 설정에 {goalSurface} {goalSense}를 지정하세요";
-            }
-            return null;
+            return why == null ? null : $"목표 표제어 '{goalSurface}'는 문 후보가 아니어서({why}) 문으로 들어갈 수 없습니다";
         }
 
         // ---- dictionary --------------------------------------------------------------------------------------------
@@ -731,10 +716,10 @@ namespace WordRoom.Shelf
             if (status == null) return;
             var sb = new StringBuilder();
             sb.Append("시작  ").Append(startLabel).Append('\n');
-            sb.Append("목표  ").Append(GoalLabel).Append('\n');
-            sb.Append("현재  ").Append(current.Room.Label).Append('\n');
+            sb.Append("목표  ").Append(goalSurface).Append('\n');
+            sb.Append("현재  ").Append(current.Room.Word).Append('\n');
             sb.Append("이동  ").Append(moves).Append("회\n");
-            sb.Append("경로  ").Append(string.Join(" → ", path));
+            sb.Append("경로  ").Append(string.Join(" → ", pathWords));
             if (reached) sb.Append('\n').Append("<color=#").Append(ColorUtility.ToHtmlStringRGB(materials.linkColor)).Append(">목표 도달 성공</color>");
             status.Set(sb.ToString());
         }
