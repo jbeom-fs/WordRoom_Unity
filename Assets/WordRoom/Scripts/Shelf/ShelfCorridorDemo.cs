@@ -21,6 +21,11 @@ namespace WordRoom.Shelf
     /// words (own headword out, per-sense link selection, first place per headword) and which headword rooms can be
     /// left again — a room's exits are the links of all of its senses together, and a room without an exit to such a
     /// room is dropped unless it is the goal, repeatedly. A link word whose room was dropped stays plain text.
+    /// The challenge is drawn on the same worker thread each time the scene is entered: a random goal among the link
+    /// candidates that some room really reaches along the final links in at least ChallengeMinMoves links at the
+    /// shortest (rooms and distances found by following them backwards from the goal; a goal without such a room is
+    /// skipped), then a random start among those rooms. The minimum applies to the draw only: arriving at the goal room
+    /// in any number of moves finishes the run. 다시 도전 keeps the drawn pair. A fixed start and goal (the context-menu examples) are for development checks only.
     /// A click on a link builds the destination room apart from the current one, checks a safe floor at its center,
     /// places the player there facing its front side, removes the previous room, then closes the reading screen and
     /// updates the current word, the path and the move count together — the only place where they change, once per
@@ -37,6 +42,7 @@ namespace WordRoom.Shelf
         const int LabelWhole = 12;               // a first sentence up to this many letters is the title as is
         const int LabelTail = 10;                // else the last eojeols up to this many letters, after "…"
         const float SlotMargin = 20f;            // open ground between the current room and the one being built
+        const int ChallengeMinMoves = 10;        // a random challenge's shortest way, in links, is at least this
 
         [Header("장면 참조")]
         [Tooltip("표준국어대사전 데이터 패키지(StreamingAssets/WordRoomData). 비어 있으면 같은 오브젝트에서 찾습니다.")]
@@ -50,10 +56,12 @@ namespace WordRoom.Shelf
         [Tooltip("좌상단 상태(시작·목표·현재·이동 횟수·경로)")]
         [SerializeField] PlayHint status;
 
-        [Header("시작·목표 (우클릭 메뉴로 예제 설정)")]
-        [Tooltip("시작 표제어. 그 표제어의 방 중앙에서 시작합니다.")]
+        [Header("개발 확인용 고정 도전 (우클릭 메뉴로 예제 설정)")]
+        [Tooltip("켜면 아래 시작·목표로 시작합니다(개발 확인용). 끄면 씬에 들어올 때마다 시작·목표를 무작위로 뽑습니다.")]
+        [SerializeField] bool fixedChallenge;
+        [Tooltip("고정 도전의 시작 표제어. 그 표제어의 방 중앙에서 시작합니다.")]
         [SerializeField] string startWord = ShelfExample.SeaWord;
-        [Tooltip("목표 표제어. 링크를 눌러 이 표제어의 방에 도착하면 완주입니다. 목표 방은 출구가 없어도 도착할 수 있습니다.")]
+        [Tooltip("고정 도전의 목표 표제어. 링크를 눌러 이 표제어의 방에 도착하면 완주입니다. 목표 방은 출구가 없어도 도착할 수 있습니다.")]
         [SerializeField] string goalWord = ShelfExample.EarthWord;
 
         [Header("링크 후보")]
@@ -88,7 +96,7 @@ namespace WordRoom.Shelf
         bool retrying;
         bool traveling;
         WordRoomDataset dataset;
-        Task<ShelfLinkGraph> graphTask;          // the one running computation of this component (null: none)
+        Task<Setup> graphTask;                   // the one running computation of this component (null: none)
         CancellationTokenSource graphCancel;
         ShelfLinkGraph graph;
         ShelfRoomBuilder builder;
@@ -98,12 +106,30 @@ namespace WordRoom.Shelf
         bool running;
         bool stopped;
         string goalSurface;
+        string startSurface;                                     // the challenge's start headword (random or fixed)
+
+        /// <summary>The link graph and the challenge decided on the worker thread.</summary>
+        sealed class Setup
+        {
+            public ShelfLinkGraph Graph;
+            public bool Random;          // drawn (false: the fixed challenge)
+            public bool Picked;          // a random challenge was found
+            public string Start;
+            public string Goal;
+            public int Tried;            // goals looked at by the draw
+            public int Moves;            // shortest distance of the drawn start to the goal
+            public int Seed;
+        }
 
         public string CurrentWord => current != null ? current.Room.Word : null;
         public int Moves => moves;
         public bool Reached => reached;
 
-        void Reset() => ApplyEarthExample();
+        void Reset()
+        {
+            ApplyEarthExample();
+            fixedChallenge = false;                              // a new component draws random challenges
+        }
 
         [ContextMenu("예제 1 설정: 항구 → 바다")]
         void ApplyHarborExample() => ApplyExample(ShelfExample.HarborWord, ShelfExample.SeaWord);
@@ -129,6 +155,7 @@ namespace WordRoom.Shelf
 #if UNITY_EDITOR
             UnityEditor.Undo.RecordObject(this, "서가 시안 예제 설정");
 #endif
+            fixedChallenge = true;                               // the examples are fixed challenges (development check)
             startWord = fromWord;
             goalWord = toWord;
             rooms = ShelfExample.Rooms();
@@ -206,16 +233,23 @@ namespace WordRoom.Shelf
             UpdateAim();
         }
 
-        /// <summary>Checks the goal, snapshots the settings and starts the link graph on a worker thread.</summary>
+        /// <summary>
+        /// Snapshots the settings and starts the link graph and the challenge choice on a worker thread: a random start
+        /// and goal (each entry into the scene draws anew), or the fixed development challenge, whose goal is checked here.
+        /// </summary>
         void Begin(WordRoomDataset d)
         {
             dataset = d;
-            if (string.IsNullOrWhiteSpace(goalWord) || !d.TryGetWordRank(goalWord.Trim(), out var goalRank))
+            string gw = null;
+            if (fixedChallenge)
             {
-                Stop($"목표 표제어 '{goalWord}'가 사전 패키지에 없습니다");
-                return;
+                if (string.IsNullOrWhiteSpace(goalWord) || !d.TryGetWordRank(goalWord.Trim(), out var goalRank))
+                {
+                    Stop($"목표 표제어 '{goalWord}'가 사전 패키지에 없습니다");
+                    return;
+                }
+                gw = d.GetWord(goalRank);
             }
-            goalSurface = d.GetWord(goalRank);
             ValidateLabels();
 
             var rules = new List<ShelfLinkGraph.RoomRule>();
@@ -229,20 +263,36 @@ namespace WordRoom.Shelf
                             Links = Selection(r),
                         });
             int limit = vocabularyLimit, minLength = doorMinLength;
-            var gw = goalSurface;
+            var seed = System.Guid.NewGuid().GetHashCode();     // a new draw on every entry into the scene
             CancelGraph();                           // never two computations for one component
             graphCancel = new CancellationTokenSource();
             var token = graphCancel.Token;
-            graphTask = Task.Run(() => new ShelfLinkGraph(d, limit, minLength, rules, gw, token), token);
+            graphTask = Task.Run(() =>
+            {
+                var setup = new Setup { Graph = new ShelfLinkGraph(d, limit, minLength, rules, token), Random = gw == null, Seed = seed };
+                if (gw != null)
+                {
+                    setup.Graph.SetGoal(gw);                     // a non-candidate goal is reported in Ready
+                    setup.Goal = gw;
+                }
+                else
+                {
+                    setup.Picked = setup.Graph.PickChallenge(new System.Random(seed), ChallengeMinMoves, token,
+                        out setup.Goal, out setup.Start, out setup.Moves, out setup.Tried);
+                }
+                return setup;
+            }, token);
             graphTask.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);   // a dropped task's failure is observed
-            SetHint("링크 연결 계산 중…");
+            SetHint(gw == null ? "링크 연결 계산·도전 선택 중…" : "링크 연결 계산 중…");
         }
 
         /// <summary>
-        /// The link graph is done: checks the goal can be reached by a link and the start room has an exit, then builds
-        /// the start room and places the player. Only the current computation gets here (a cancelled one was dropped).
+        /// The link graph and the challenge are done: a random challenge needs a goal some room reaches (else the run
+        /// stops with the reason); the fixed one checks the goal can be reached by a link. Then the start room must have
+        /// an exit, and it is built and the player placed. Only the current computation gets here (a cancelled one was
+        /// dropped).
         /// </summary>
-        void Ready(Task<ShelfLinkGraph> task)
+        void Ready(Task<Setup> task)
         {
             graphCancel?.Dispose();
             graphCancel = null;
@@ -258,24 +308,45 @@ namespace WordRoom.Shelf
                 Stop($"링크 연결 계산 실패: {task.Exception?.GetBaseException().Message}");
                 return;
             }
-            graph = task.Result;
+            var setup = task.Result;
+            graph = setup.Graph;
             foreach (var problem in graph.ExceptionProblems())
                 Debug.LogWarning($"[서가 시안] 분리 예외 '{problem}'는 표제어가 어절 앞부분이 아니거나 사전에 없어 적용하지 않습니다.", this);
+
+            if (setup.Random)
+            {
+                if (!setup.Picked)
+                {
+                    Stop($"최단 이동 {ChallengeMinMoves}회 이상인 시작·목표 조합이 없습니다 (목표 후보 {setup.Tried:N0}개 확인)");
+                    return;
+                }
+                startSurface = setup.Start;
+                goalSurface = setup.Goal;
+                Debug.Log($"[서가 시안] 무작위 도전: {startSurface} → {goalSurface} · 최단 이동 {setup.Moves}회 " +
+                          $"(시드 {setup.Seed} · 목표 {setup.Tried:N0}개째 선택 · 이 목표에 도달하는 방 {graph.ReachingCount:N0}개 중 {ChallengeMinMoves}회 이상에서 추첨)", this);
+            }
+            else
+            {
+                goalSurface = setup.Goal;
+                var why = graph.WhyNotCandidate(goalSurface);
+                if (why != null)
+                {
+                    Stop($"목표 표제어 '{goalSurface}'는 링크 후보가 아니어서({why}) 링크로 도착할 수 없습니다");
+                    return;
+                }
+                startSurface = string.IsNullOrWhiteSpace(startWord) ? null : startWord.Trim();
+            }
             Debug.Log($"[서가 시안] 링크 연결 계산: 표제어 방 후보 {graph.RoomCount:N0}개 중 출구 없는 방 {graph.RemovedCount:N0}개 제외 " +
                       $"(상위 {vocabularyLimit:N0}개 · {doorMinLength}글자 이상 · 목표 {goalSurface} 유지)", this);
 
-            var why = graph.WhyNotCandidate(goalSurface);
-            if (why != null)
-            {
-                Stop($"목표 표제어 '{goalSurface}'는 링크 후보가 아니어서({why}) 링크로 도착할 수 없습니다");
-                return;
-            }
-            var start = string.IsNullOrWhiteSpace(startWord) ? null : RoomOf(startWord.Trim());
+            var start = startSurface == null ? null : RoomOf(startSurface);
             if (start == null)
             {
-                Stop($"시작 표제어 '{startWord}'의 뜻풀이를 사전 패키지에서 찾지 못했습니다");
+                Stop($"시작 표제어 '{startSurface}'의 뜻풀이를 사전 패키지에서 찾지 못했습니다");
                 return;
             }
+            if (!setup.Random && graph.DistanceToGoal(start.Word) < 0)
+                Debug.LogWarning($"[서가 시안] 고정 도전: 시작 방 {start.Word}에서 링크를 따라 목표 {goalSurface}에 도착할 수 없습니다(개발 확인용이라 그대로 시작합니다).", this);
             if (IsGoal(start.Word))
             {
                 Stop("시작 방이 이미 목표입니다");
