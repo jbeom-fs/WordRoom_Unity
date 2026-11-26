@@ -138,7 +138,7 @@ namespace WordRoom.Shelf
                 return;
             }
             onEvent = OnInputEvent;
-            ArchiveUi.Bind(bindings, closeButton, Close);
+            ArchiveUi.Bind(bindings, closeButton, OnCloseButton);
             scroll.DragStarted += OnDragStarted;
             scroll.Scrolled += OnScrolled;
             bodyText.richText = true;
@@ -230,6 +230,33 @@ namespace WordRoom.Shelf
             if (ready) noticeText.text = text ?? "";
         }
 
+        /// <summary>
+        /// Locked while a room transition runs: the screen stays as it is (open or closed) but Escape, the close button,
+        /// hovering and link clicks do nothing; a press made before or during the lock never clicks after it. Close()
+        /// called by code still works. Unlocking only gives the controls back.
+        /// </summary>
+        public void SetLocked(bool locked)
+        {
+            if (Locked == locked) return;
+            Locked = locked;
+            CancelPress();
+            steps.Clear();
+            if (ready) closeButton.interactable = !locked;
+            if (locked && hovered >= 0)
+            {
+                hovered = -1;
+                if (open) Render();
+            }
+            if (!locked) SyncPointer();
+        }
+
+        public bool Locked { get; private set; }
+
+        void OnCloseButton()
+        {
+            if (!Locked) Close();
+        }
+
         void Update()
         {
             if (!open) return;
@@ -238,6 +265,7 @@ namespace WordRoom.Shelf
                 CloseUnusable();
                 return;
             }
+            if (Locked) return;                                              // no Escape, hover or click during a transition
             var kb = Keyboard.current;
             if (kb != null && kb.escapeKey.wasPressedThisFrame)
             {
@@ -267,6 +295,12 @@ namespace WordRoom.Shelf
             if (!Usable)
             {
                 CloseUnusable();
+                return;
+            }
+            if (Locked)
+            {
+                steps.Clear();
+                CancelPress();
                 return;
             }
             if (dragFrame == Time.frameCount) CancelPress();                 // the drag started from a press made before this frame

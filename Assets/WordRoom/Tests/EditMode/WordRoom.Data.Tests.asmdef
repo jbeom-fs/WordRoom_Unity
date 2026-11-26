@@ -9,7 +9,9 @@
         "WordRoom.Unity",
         "WordRoom.Generation",
         "WordRoom.World",
-        "WordRoom.Network"
+        "WordRoom.Network",
+        "WordRoom.Shelf",
+        "Unity.TextMeshPro"
     ],
     "includePlatforms": [
         "Editor"

@@ -157,6 +157,19 @@ namespace WordRoom.World
             viewHomeSaved = true;
         }
 
+        /// <summary>
+        /// Locks and hides the cursor now when this player is in control: placed and enabled, the game focused, no menu
+        /// block and not in the frame one was lifted, and no map shown. For a caller whose screen just gave control
+        /// back, so mouse look works without a click. False (nothing changed) otherwise.
+        /// </summary>
+        public bool TryLockCursor()
+        {
+            if (!Placed || !Application.isFocused || !InputAllowed || mapMode) return false;
+            relockOnResume = false;
+            if (!CursorLocked || Cursor.visible) SetCursorLock(true);
+            return true;
+        }
+
         /// <summary>Unlocks and shows the cursor (shared by every player; no player needed).</summary>
         public static void ReleaseCursor() => SetCursorLock(false);
 

@@ -28,22 +28,33 @@ namespace WordRoom.Shelf
     }
 
     /// <summary>
-    /// Conservative word extraction from a definition, shared by the link graph and the reading screen.
+    /// Conservative rule-based link extraction from a definition. FindCandidates is the one entry point: the link graph
+    /// (ShelfLinkGraph.Extract → room exits and reachability) and the reading screen (the graph's Doors of each sense)
+    /// use its result, so a clickable link and a graph connection are always the same thing.
     /// An eojeol (word unit) is a maximal run of letters and digits; spaces, punctuation and symbols (· % ㎢ …) are
     /// its boundaries, so no candidate ever joins the end of one eojeol to the start of the next ("바다의 경계" never
-    /// gives "의경"). An eojeol gives at most one candidate, always from its start:
-    /// 0. a confirmed verb form (모자라는) gives none; a counter after a quantity (개의 right after 한, 두, 몇, 여러, a
-    ///    number…, only spaces between: "두 개의" is 개 + 의) gives the counter, which is too short to be a door;
-    /// 1. else the whole eojeol, when it is a registered headword ("바다", the noun "에도");
-    /// 2. else the headword before one known ending — a particle, a particle combination or a form of the copula
-    ///    이다 / 이라… ("바다의" → 바다 + 의, "해안이다" → 해안 + 이다, "공자라는" → 공자 + 라는, "전신이라고도" → 전신 +
-    ///    이라고도): endings are tried longest first and the split is fixed at the first one whose remainder is a
-    ///    registered headword. The ending is not part of the link and stays plain text in its original place.
+    /// gives "의경"). An eojeol gives at most one candidate, always a headword at its start; the candidate's Start and
+    /// Length are the clicked range in the definition, its Text exactly the letters there ("영화용 음화" → [영화]용), so
+    /// the rest of the eojeol, the spaces and the punctuation stay plain text as written. In order:
+    /// 0. a confirmed per-sense split (SenseSplits: "68510|영화용" → 영화, the suffix -용 only where its context was
+    ///    checked) is taken first; a confirmed verb form (모자라는) gives none; a counter after a quantity (개의 right
+    ///    after 한, 두, 몇, 여러, a number…, only spaces between: "두 개의" is 개 + 의) gives the counter, which is too
+    ///    short to be a door; a confirmed eojeol split (WordSplits: 결과의 → 결과) is taken;
+    /// 0b. when 와/과 (optionally followed by 의, 는 or 도) can be part of a registered noun, compare that noun
+    ///    with a registered noun plus the fitting particle. Choose the particle reading when the local construction
+    ///    supports it ("그 말과 다른", "강과 시내를 아울러"); otherwise use the usual whole-word and ending rules;
+    /// 1. else the whole eojeol, when it is a registered headword ("바다", the noun "에도", "비공개" — a prefix is never
+    ///    cut off, so 비공개 never links 공개);
+    /// 2. else the headword before one allowed ending — a particle, a particle combination or a form of the copula
+    ///    이다 / 이라… ("바다의" → 바다 + 의, "해안이다" → 해안 + 이다, "공자라는" → 공자 + 라는) — but only when exactly
+    ///    one ending leaves a registered headword. When two or more do ("결과의": 결 + 과의 or 결과 + 의; "길이라는": 길 +
+    ///    이라는 or 길이 + 라는) and no confirmed exception above decides, the eojeol stays plain text.
     /// Splitting looks only at registered headwords (isEntry); the door conditions (vocabulary, length, restricted
-    /// list: isDoor) are applied afterwards to the one headword chosen, and when it fails the whole eojeol stays plain
-    /// text with no retry ("길이라는" → 길 + 이라는, 길 has one letter, so no door, and never 길이 + 라는).
-    /// Nothing else is cut: no splitting inside an eojeol at other places, no stacked endings, no inflection, so a run
-    /// without its spaces ("바다의경계는") or one with digits or Latin ("43배이다") stays plain text.
+    /// list, definition: isDoor) are applied afterwards to the one headword decided, and when it fails the whole eojeol
+    /// stays plain text: a split is never changed to pass them. Nothing else is cut: no suffixes or prefixes outside the
+    /// exceptions, no stacked endings, no inflection, so a run without its spaces ("바다의경계는") or one with digits or
+    /// Latin ("43배이다") stays plain text. Own-room links, repeats within a definition and per-challenge link settings
+    /// are handled by ShelfLinkGraph on this result.
     /// </summary>
     public static class ShelfLinkText
     {
@@ -148,35 +159,209 @@ namespace WordRoom.Shelf
             return false;
         }
 
-        /// <summary>Candidate link words of `definition` in reading order, as link parts (Target = the word).</summary>
+        /// <summary>
+        /// Candidate link words of `definition` in reading order, as link parts: Start/Length the clicked range in
+        /// `definition`, Text the letters there, Target the headword (equal to Text: a headword is always the start of
+        /// its eojeol).
+        /// </summary>
         /// <param name="isEntry">
         /// True when the surface is a registered headword (exact spelling), with no door conditions — used to decide
         /// where an eojeol splits.
         /// </param>
         /// <param name="isDoor">True when that headword may become a door (vocabulary, length, restricted list, definition).</param>
         /// <param name="senseId">SenseId of the room whose definition this is (for the per-room split exceptions).</param>
-        public static List<ShelfTextPart> FindCandidates(string definition, string senseId, Func<string, bool> isEntry, Func<string, bool> isDoor)
+        public static List<ShelfTextPart> FindCandidates(string definition, string senseId, Func<string, bool> isEntry, Func<string, bool> isDoor) =>
+            FindCandidates(definition, senseId, isEntry, isDoor, null);
+
+        internal static List<ShelfTextPart> FindCandidates(string definition, string senseId, Func<string, bool> isEntry,
+            Func<string, bool> isDoor, Func<string, string, bool> hasParallelUse)
         {
             var found = new List<ShelfTextPart>();
             if (string.IsNullOrEmpty(definition)) return found;
-            var i = 0;
-            string previous = null;                  // the eojeol just before, when only spaces separate it from this one
-            while (i < definition.Length)
+            var eojeols = Eojeols(definition);
+            for (var k = 0; k < eojeols.Count; k++)
             {
-                if (!IsWordChar(definition[i]))
+                var e = eojeols[k];
+                // Keep counter behavior across whitespace. Punctuation and line breaks stop forward context.
+                var previous = k > 0 && eojeols[k - 1].SpacesAfter ? eojeols[k - 1].Text : null;
+                var next = e.ContextAfter ? eojeols[k + 1].Text : null;
+                var following = next != null && eojeols[k + 1].ContextAfter ? eojeols[k + 2].Text : null;
+                var word = Headword(e.Text, previous, next, following, senseId, isEntry, hasParallelUse);
+                // The headword is the eojeol's start: the clicked range is [start, start + its length) of the definition.
+                if (word != null && isDoor(word)) found.Add(new ShelfTextPart(definition.Substring(e.Start, word.Length), e.Start, word));
+            }
+            return found;
+        }
+
+        /// <summary>One eojeol and whether the gap to the next one allows context.</summary>
+        readonly struct Eojeol
+        {
+            public readonly int Start;
+            public readonly string Text;
+            public readonly bool SpacesAfter;
+            public readonly bool ContextAfter;
+
+            public Eojeol(int start, string text, bool spacesAfter, bool contextAfter)
+            {
+                Start = start;
+                Text = text;
+                SpacesAfter = spacesAfter;
+                ContextAfter = contextAfter;
+            }
+        }
+
+        /// <summary>The eojeols (maximal runs of letters and digits) of `text` in order.</summary>
+        static List<Eojeol> Eojeols(string text)
+        {
+            var list = new List<(int Start, int End)>();
+            var i = 0;
+            while (i < text.Length)
+            {
+                if (!IsWordChar(text[i]))
                 {
-                    if (!char.IsWhiteSpace(definition[i])) previous = null;   // punctuation breaks the context
                     i++;
                     continue;
                 }
                 var start = i;
-                while (i < definition.Length && IsWordChar(definition[i])) i++;
-                var eojeol = definition.Substring(start, i - start);
-                var word = Headword(eojeol, previous, senseId, isEntry);
-                previous = eojeol;
-                if (word != null && isDoor(word)) found.Add(new ShelfTextPart(word, start, word));
+                while (i < text.Length && IsWordChar(text[i])) i++;
+                list.Add((start, i));
             }
-            return found;
+            var result = new List<Eojeol>(list.Count);
+            for (var k = 0; k < list.Count; k++)
+            {
+                var spaces = k + 1 < list.Count;
+                var lineBreak = false;
+                for (var j = list[k].End; spaces && j < list[k + 1].Start; j++)
+                {
+                    var c = text[j];
+                    spaces = char.IsWhiteSpace(c);
+                    lineBreak |= c == '\n' || c == '\r' || c == '\u2028' || c == '\u2029';
+                }
+                result.Add(new Eojeol(list[k].Start, text.Substring(list[k].Start, list[k].End - list[k].Start), spaces, spaces && !lineBreak));
+            }
+            return result;
+        }
+
+        // ---- 와/과 context ------------------------------------------------------------------------------------------
+
+        static readonly string[] ComparisonAndCompanionStems =
+        {
+            "같", "다르", "다른", "달리", "비슷", "닮", "흡사",
+            "함께", "더불어", "벗하", "싸우", "맞서", "견주", "사귀",
+            "반응하", "결합하", "대립하", "관계되", "관계있", "관련되",
+        };
+
+        static readonly string[] RelationNouns = { "관계", "대응", "융화", "조화", "차이", "사이", "연관", "대조" };
+        static readonly string[] NounContextEndings = { "이", "가", "은", "는", "을", "를", "의", "에", "에서", "로", "으로" };
+
+        // Independent uses of two registered nouns in parallel: A(이)나 B, or the paired modifiers A적·B적(인).
+        static readonly Regex AlternativeNouns = new Regex(
+            @"(?<![\p{L}\p{Nd}])([가-힣]+?)(이나|나)[ \t]+([가-힣]+)(?![\p{L}\p{Nd}])", RegexOptions.CultureInvariant);
+        static readonly Regex ParallelModifiers = new Regex(
+            @"(?<![\p{L}\p{Nd}])([가-힣]+)적[ \t]*[·ㆍ][ \t]*([가-힣]+)적(?:인|으로)?(?![\p{L}\p{Nd}])",
+            RegexOptions.CultureInvariant);
+
+        internal static void AddParallelUses(string definition, Func<string, bool> isEntry, HashSet<(string, string)> uses)
+        {
+            if (definition.IndexOf("나 ", StringComparison.Ordinal) >= 0 || definition.IndexOf("나\t", StringComparison.Ordinal) >= 0)
+            {
+                foreach (Match match in AlternativeNouns.Matches(definition))
+                {
+                    var left = match.Groups[1].Value;
+                    var right = match.Groups[3].Value;
+                    if (FitsFinalConsonant(left[left.Length - 1], match.Groups[2].Length == 2) && isEntry(left) && isEntry(right))
+                        uses.Add((left, right));
+                }
+            }
+
+            if (definition.IndexOf('·') < 0 && definition.IndexOf('ㆍ') < 0) return;
+            foreach (Match match in ParallelModifiers.Matches(definition))
+            {
+                var left = match.Groups[1].Value;
+                var right = match.Groups[2].Value;
+                if (isEntry(left) && isEntry(right)) uses.Add((left, right));
+            }
+        }
+
+        static bool FitsFinalConsonant(char syllable, bool needsConsonant) =>
+            syllable < '가' || syllable > '힣' || ((syllable - '가') % 28 != 0) == needsConsonant;
+
+        // Index of the conjunction in X과 or X과의/는/도 (likewise 와), leaving at least one letter before it.
+        static int ConjunctionIndex(string eojeol)
+        {
+            var index = eojeol.Length - 1;
+            if (eojeol[index] == '의' || eojeol[index] == '는' || eojeol[index] == '도') index--;
+            return index > 0 && (eojeol[index] == '와' || eojeol[index] == '과') ? index : -1;
+        }
+
+        static bool IsNounPlusConjunction(string eojeol, Func<string, bool> isEntry)
+        {
+            if (eojeol == null) return false;
+            var index = ConjunctionIndex(eojeol);
+            return index > 0 && index == eojeol.Length - 1
+                && FitsFinalConsonant(eojeol[index - 1], eojeol[index] == '과')
+                && isEntry(eojeol.Substring(0, index));
+        }
+
+        static bool NounInContext(string eojeol, string noun)
+        {
+            if (!eojeol.StartsWith(noun, StringComparison.Ordinal)) return false;
+            if (eojeol.Length == noun.Length) return true;
+            var ending = eojeol.Substring(noun.Length);
+            return Array.IndexOf(NounContextEndings, ending) >= 0;
+        }
+
+        static bool IsRelationNoun(string eojeol)
+        {
+            if (eojeol == null) return false;
+            foreach (var noun in RelationNouns)
+                if (NounInContext(eojeol, noun)) return true;
+            return false;
+        }
+
+        static string BeforeObjectParticle(string eojeol)
+        {
+            if (eojeol.Length < 2) return null;
+            var ending = eojeol[eojeol.Length - 1];
+            if (ending != '을' && ending != '를') return null;
+            return FitsFinalConsonant(eojeol[eojeol.Length - 2], ending == '을')
+                ? eojeol.Substring(0, eojeol.Length - 1) : null;
+        }
+
+        static string BeforeMeansParticle(string eojeol)
+        {
+            if (eojeol.Length < 2 || eojeol[eojeol.Length - 1] != '로') return null;
+            var length = eojeol.EndsWith("으로", StringComparison.Ordinal) ? eojeol.Length - 2 : eojeol.Length - 1;
+            if (length == 0) return null;
+            var syllable = eojeol[length - 1];
+            if (syllable < '가' || syllable > '힣') return null;
+            var final = (syllable - '가') % 28;
+            return (final != 0 && final != 8) == (length == eojeol.Length - 2) ? eojeol.Substring(0, length) : null;
+        }
+
+        static bool HasConjunctionContext(string stem, char followingParticle, string previous, string next, string following,
+            Func<string, bool> isEntry, Func<string, string, bool> hasParallelUse)
+        {
+            if (next == null) return false;
+            if (followingParticle == '의')
+                return IsRelationNoun(next) || (IsRelationNoun(following) &&
+                    (next.EndsWith("적", StringComparison.Ordinal) || next.EndsWith("적인", StringComparison.Ordinal)));
+
+            foreach (var predicate in ComparisonAndCompanionStems)
+                if (next.StartsWith(predicate, StringComparison.Ordinal)) return true;
+            if (followingParticle != '\0') return false;
+            if (NounInContext(next, stem) || (next == "직접적인" && IsRelationNoun(following))) return true;
+
+            var objectNoun = BeforeObjectParticle(next);
+            if (objectNoun != null && (following == "아울러" || following == "통틀어"))
+            {
+                // In an already coordinated phrase, 공과 can instead modify the second item: 계열과 공과 계열을 아울러.
+                return !IsNounPlusConjunction(previous, isEntry);
+            }
+
+            // An overt shared case marker and an independently attested parallel use of the same two nouns.
+            var second = objectNoun ?? BeforeMeansParticle(next);
+            return second != null && hasParallelUse != null && hasParallelUse(stem, second);
         }
 
         // ---- quantity context ------------------------------------------------------------------------------------------
@@ -296,13 +481,21 @@ namespace WordRoom.Shelf
 
         /// <summary>
         /// Per-room splits, for an eojeol whose split depends on the context: "SenseId|eojeol" → headword. Checked first.
-        /// 말과의 is 말과(horse family) + 의 in animal definitions but 말(word) + 과의 in 조사(397604)/토(25981), which the
-        /// default rule already gives, so only the animal rooms are listed.
+        /// 말과의 is 말과(horse family) + 의 in animal definitions; in 조사(397604)/토(25981) it is 말(word) + 과의, whose
+        /// headword has one letter (no door), so the ambiguous eojeol staying plain text there loses nothing. The 말과 of
+        /// "그 말과 다른" there needs no entry: the comparison rule reads it as 말 + 과.
+        /// A suffix is only cut here, where its use was read: 영화용 is 영화 + 용 (for films) in 필름(68510).
         /// </summary>
         static readonly Dictionary<string, string> SenseSplits = new Dictionary<string, string>
         {
+            { "68510|영화용", "영화" },      // 필름 "영화용 음화와 양화를 통틀어 이르는 말." (suffix -용)
             { "126851|말과의", "말과" },     // 당나귀 "말과의 포유류."
             { "146729|말과의", "말과" },     // 말 "말과의 포유류."
+            // Two endings leave a headword (자연 + 과의 / 자연과 + 의 …); the context reads the first.
+            { "138335|자연과의", "자연" },   // 라이트 "자연과의 융화를 꾀한"
+            { "244222|행정과는", "행정" },   // 위원회 "일반 행정과는 달리"
+            { "242361|전화로부터", "전화" }, // 워너 "고미술을 전화(戰禍)로부터 보호하기" (전화09 is a sense of the 전화 room)
+            { "375423|과거로부터", "과거" }, // 시간 "과거로부터 현재와 미래로"
             // 개(dog) + 의, and one counter after a variable, with no quantity word before them.
             { "3402|개의", "개" },           // 강아지 "개의 새끼."
             { "97555|개의", "개" },          // 구보 "개의 쓸개 속에 든 결석을…"
@@ -327,7 +520,8 @@ namespace WordRoom.Shelf
 
         /// <summary>
         /// Eojeols split the same way in every use found in the package: eojeol → headword (the rest stays plain text).
-        /// In each, the longest ending starts with the headword's last syllable (결과의: 과의 → 결, 1 letter) and hid it.
+        /// Each has two splits on registered headwords (결과의: 결 + 과의 or 결과 + 의), so without this entry it would stay
+        /// plain text; the uses found all read the listed one.
         /// </summary>
         static readonly Dictionary<string, string> WordSplits = new Dictionary<string, string>
         {
@@ -386,12 +580,15 @@ namespace WordRoom.Shelf
         /// The headword an eojeol is split into, decided on registered headwords only (no door conditions):
         /// 1. a per-room exception for this room's SenseId; 2. a confirmed verb form gives none; 3. a counter form right
         /// after a quantity eojeol (`previous`, only spaces between) gives the counter; 4. an eojeol exception;
-        /// 5. the whole eojeol when it is a headword (even when spelled like an ending, e.g. the noun 에도); 6. else the
-        /// part before the longest known ending whose remainder is a headword — the split is fixed at that first point
-        /// and never retried with a shorter ending (길이라는 → 길 + 이라는, not 길이 + 라는). The caller then applies the
-        /// door conditions to that one headword, so a failing one (길: one letter) leaves the eojeol as plain text.
+        /// 4b. a competing noun + 와/과 reading with a matching final consonant and supporting context;
+        /// 5. the whole eojeol when it is a headword (even when spelled like an ending, e.g.
+        /// the noun 에도); 6. else the
+        /// part before an allowed ending when exactly one ending leaves a headword; two or more (길이라는: 길 + 이라는 or
+        /// 길이 + 라는) give none. The caller then applies the door conditions to that one headword, so a failing one
+        /// leaves the eojeol as plain text.
         /// </summary>
-        static string Headword(string eojeol, string previous, string senseId, Func<string, bool> isEntry)
+        static string Headword(string eojeol, string previous, string next, string following, string senseId,
+            Func<string, bool> isEntry, Func<string, string, bool> hasParallelUse)
         {
             if (senseId != null && SenseSplits.TryGetValue(senseId + "|" + eojeol, out var bySense) && ValidException(eojeol, bySense, isEntry))
                 return bySense;
@@ -399,14 +596,39 @@ namespace WordRoom.Shelf
             if (CounterForms.TryGetValue(eojeol, out var counter) && IsQuantity(previous) && ValidException(eojeol, counter, isEntry))
                 return counter;
             if (WordSplits.TryGetValue(eojeol, out var byWord) && ValidException(eojeol, byWord, isEntry)) return byWord;
-            if (isEntry(eojeol)) return eojeol;
+
+            var whole = isEntry(eojeol);
+            var conjunction = ConjunctionIndex(eojeol);
+            var incompatibleConjunction = false;
+            if (conjunction > 0)
+            {
+                var tail = conjunction == eojeol.Length - 1 ? '\0' : eojeol[eojeol.Length - 1];
+                // A nominal reading is either the whole eojeol or the longer noun before 의/는/도.
+                if (whole || (tail != '\0' && isEntry(eojeol.Substring(0, conjunction + 1))))
+                {
+                    incompatibleConjunction = !FitsFinalConsonant(eojeol[conjunction - 1], eojeol[conjunction] == '과');
+                    if (!incompatibleConjunction)
+                    {
+                        var stem = eojeol.Substring(0, conjunction);
+                        if (isEntry(stem) && HasConjunctionContext(stem, tail, previous, next, following, isEntry, hasParallelUse))
+                            return stem;
+                    }
+                }
+            }
+
+            if (whole) return eojeol;
+            string found = null;
             foreach (var ending in Endings)
             {
                 if (eojeol.Length <= ending.Length || !eojeol.EndsWith(ending, StringComparison.Ordinal)) continue;
-                var stem = eojeol.Substring(0, eojeol.Length - ending.Length);
-                if (isEntry(stem)) return stem;
+                var stemLength = eojeol.Length - ending.Length;
+                if (incompatibleConjunction && stemLength == conjunction) continue;
+                var stem = eojeol.Substring(0, stemLength);
+                if (!isEntry(stem)) continue;
+                if (found != null) return null;                  // ambiguous split, no confirmed exception: plain text
+                found = stem;
             }
-            return null;
+            return found;
         }
 
         /// <summary>

@@ -1,0 +1,270 @@
+fileFormatVersion: 2
+guid: 0c373a6eef4d8be43ad6c8d652790107
+ModelImporter:
+  serializedVersion: 24200
+  internalIDToNameTable: []
+  externalObjects:
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Binding_Bottle_green
+    second: {fileID: 2100000, guid: 0377cb3c4fe1bf64bbe8c6993a723b68, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Binding_Clove
+    second: {fileID: 2100000, guid: eda1e2d4942b4bb4dbba374a71dbc0c6, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Binding_Cordovan
+    second: {fileID: 2100000, guid: e356f699c8dd93f46b15612dee611caf, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Binding_Lichen
+    second: {fileID: 2100000, guid: e9c4a58dbd9777145860afaea86755e2, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Binding_Madder
+    second: {fileID: 2100000, guid: 3ddd513cc5d216b4b95d127d25c30d9b, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Binding_Olive
+    second: {fileID: 2100000, guid: a67e1d9e98a9f8741ad3b8c4c663e9cf, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Binding_Parchment
+    second: {fileID: 2100000, guid: 842fbaca115736144b50b6709edd2ce5, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Binding_Russet
+    second: {fileID: 2100000, guid: 63daa679dd6804e44b60ca1c86c4c23e, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Binding_Tobacco
+    second: {fileID: 2100000, guid: 2249c8b803e47c14282d5ed2527075b5, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Bookbindery_faded_gilt
+    second: {fileID: 2100000, guid: 3519dd234ed0a66408c45f69e09d2b1a, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Ceiling_burnished_edging
+    second: {fileID: 2100000, guid: 1fb781922ea668349b6a68d862a98e5e, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Ceiling_dark_walnut
+    second: {fileID: 2100000, guid: 2bdb7b06647e2984fa9b120f82f213a6, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Ceiling_walnut
+    second: {fileID: 2100000, guid: 484a2fcc9101dee4eac5024ff033df46, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Ceiling_warm_lime_plaster
+    second: {fileID: 2100000, guid: c6e3227cb50f7d848a05f8b30762b489, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Glass_warm_opal
+    second: {fileID: 2100000, guid: d7a2569fa175c0a4490ec30cb34760d1, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Metal_aged_brass
+    second: {fileID: 2100000, guid: b3e0f1e4e51c2e946a368bc5d3b5a41c, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Metal_brown_brass_patina
+    second: {fileID: 2100000, guid: 407bbcd58868f7143b770b4329bd3bcf, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Oak_perimeter_border
+    second: {fileID: 2100000, guid: cbb777ffca094e14a8f38f436e54efb8, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Oak_waxed_parquet_01
+    second: {fileID: 2100000, guid: c54c87be19b293840beb08820c421954, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Oak_waxed_parquet_02
+    second: {fileID: 2100000, guid: e2f2831ba2aa0e946a8475cde729f495, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Oak_waxed_parquet_03
+    second: {fileID: 2100000, guid: a1b8882c758b5e2418a403dbda24b984, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Oak_waxed_parquet_04
+    second: {fileID: 2100000, guid: 64a702618f113594c8e28ad9a619ffff, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Oak_waxed_parquet_05
+    second: {fileID: 2100000, guid: 422318aea167e22469a75f400b9c4c37, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Oak_waxed_parquet_06
+    second: {fileID: 2100000, guid: 83fef3c1cc2ffd04ba4b60db02db116d, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Paper_foxed_fore_edges
+    second: {fileID: 2100000, guid: 4e396945cdbdaf34ab0a51c8a43ed5fc, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Parquet_shadow_in_joints
+    second: {fileID: 2100000, guid: 26f7323826336534ca6de967cf2a9903, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Walnut_burnished_arrises
+    second: {fileID: 2100000, guid: b122a5a1a13932d45809a4eb1b7d66cf, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Walnut_dark_carved_molding
+    second: {fileID: 2100000, guid: f6b1fd2dabefba54ca6b3c8e438bb8be, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Walnut_figured_panels
+    second: {fileID: 2100000, guid: 17533cdfe4a94e541bdbfbfda7de0eee, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Walnut_old_rubbed_oil
+    second: {fileID: 2100000, guid: 2c1617244407eee429db9f7bbb034991, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Walnut_shelf_backs_and_grooves
+    second: {fileID: 2100000, guid: 2971594ec2a5fea48990a857ef2cb89e, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Walnut_writing_surface
+    second: {fileID: 2100000, guid: c4fc9d1bcdf41724391e50c83e86fc68, type: 2}
+  materials:
+    materialImportMode: 1
+    materialName: 0
+    materialSearch: 1
+    materialLocation: 1
+  animations:
+    legacyGenerateAnimations: 4
+    bakeSimulation: 0
+    resampleCurves: 1
+    optimizeGameObjects: 0
+    removeConstantScaleCurves: 0
+    motionNodeName: 
+    animationImportErrors: 
+    animationImportWarnings: 
+    animationRetargetingWarnings: 
+    animationDoRetargetingWarnings: 0
+    importAnimatedCustomProperties: 0
+    importConstraints: 0
+    animationCompression: 1
+    animationRotationError: 0.5
+    animationPositionError: 0.5
+    animationScaleError: 0.5
+    animationWrapMode: 0
+    extraExposedTransformPaths: []
+    extraUserProperties: []
+    clipAnimations: []
+    isReadable: 0
+  meshes:
+    lODScreenPercentages: []
+    globalScale: 1
+    meshCompression: 0
+    addColliders: 0
+    useSRGBMaterialColor: 1
+    sortHierarchyByName: 1
+    importPhysicalCameras: 1
+    importVisibility: 0
+    importBlendShapes: 0
+    importCameras: 0
+    importLights: 0
+    nodeNameCollisionStrategy: 1
+    fileIdsGeneration: 2
+    swapUVChannels: 0
+    generateSecondaryUV: 0
+    useFileUnits: 1
+    keepQuads: 0
+    weldVertices: 1
+    bakeAxisConversion: 0
+    preserveHierarchy: 0
+    skinWeightsMode: 0
+    maxBonesPerVertex: 4
+    minBoneWeight: 0.001
+    optimizeBones: 1
+    generateMeshLods: 0
+    meshLodGenerationFlags: 0
+    maximumMeshLod: -1
+    meshOptimizationFlags: -1
+    indexFormat: 0
+    secondaryUVAngleDistortion: 8
+    secondaryUVAreaDistortion: 15.000001
+    secondaryUVHardAngle: 88
+    secondaryUVMarginMethod: 1
+    secondaryUVMinLightmapResolution: 40
+    secondaryUVMinObjectScale: 1
+    secondaryUVPackMargin: 4
+    useFileScale: 1
+    strictVertexDataChecks: 0
+  tangentSpace:
+    normalSmoothAngle: 60
+    normalImportMode: 0
+    tangentImportMode: 2
+    normalCalculationMode: 4
+    legacyComputeAllNormalsFromSmoothingGroupsWhenMeshHasBlendShapes: 0
+    blendShapeNormalImportMode: 1
+    normalSmoothingSource: 0
+  referencedClips: []
+  importAnimation: 0
+  humanDescription:
+    serializedVersion: 3
+    human: []
+    skeleton: []
+    armTwist: 0.5
+    foreArmTwist: 0.5
+    upperLegTwist: 0.5
+    legTwist: 0.5
+    armStretch: 0.05
+    legStretch: 0.05
+    feetSpacing: 0
+    globalScale: 1
+    rootMotionBoneName: 
+    hasTranslationDoF: 0
+    hasExtraRoot: 0
+    skeletonHasParents: 1
+  lastHumanDescriptionAvatarSource: {instanceID: 0}
+  autoGenerateAvatarMappingIfUnspecified: 1
+  animationType: 0
+  humanoidOversampling: 1
+  avatarSetup: 0
+  addHumanoidExtraRootOnlyWhenUsingAvatar: 1
+  importBlendShapeDeformPercent: 1
+  remapMaterialsIfMaterialImportModeIsNone: 0
+  additionalBone: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

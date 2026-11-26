@@ -1,8 +1,8 @@
+using System.Collections;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using TMPro;
 using UnityEngine;
 using WordRoom.Data;
 using WordRoom.UnityLayer;
@@ -11,11 +11,12 @@ using WordRoom.World;
 namespace WordRoom.Shelf
 {
     /// <summary>
-    /// Prototype of reading-room exploration on the Standard Korean Dictionary package. Each room is one headword: an
-    /// octagonal reading room with one lectern per sense of that headword that has a link, each holding that one
-    /// definition on its parchment (numbered within its dictionary entry when the entry has two or more senses). The player walks up to a lectern, presses E while
-    /// aiming at it from its reading area, reads the document spread open in the middle of the screen (ShelfReader)
-    /// and clicks a link word to go to that headword's room.
+    /// Prototype of reading-room exploration on the Standard Korean Dictionary package. Each room is one headword
+    /// shown in the scene's one octagonal reading room (ShelfRoomView): one low reading stand (lectern) per sense of
+    /// that headword that has a link, standing on the desk of its side (ShelfFurniturePlan: at most one desk per side),
+    /// each with an open book (no text on it) on its slanted panel. The player walks up to a book, sees only "[E] 읽기"
+    /// while aiming at it from its reading area, presses E to read that sense spread open in the middle of the screen
+    /// (ShelfReader) and clicks a link word to go to that headword's room.
     /// After the dictionary is loaded, a ShelfLinkGraph is computed once on a worker thread: link candidates (top
     /// vocabularyLimit, at least doorMinLength long, not restricted, conservative particle cut), each sense's link
     /// words (own headword out, per-sense link selection, first place per headword) and which headword rooms can be
@@ -26,14 +27,17 @@ namespace WordRoom.Shelf
     /// shortest (rooms and distances found by following them backwards from the goal; a goal without such a room is
     /// skipped), then a random start among those rooms. The minimum applies to the draw only: arriving at the goal room
     /// in any number of moves finishes the run. 다시 도전 keeps the drawn pair. A fixed start and goal (the context-menu examples) are for development checks only.
-    /// A click on a link builds the destination room apart from the current one, checks a safe floor at its center,
-    /// places the player there facing its front side, removes the previous room, then closes the reading screen and
-    /// updates the current word, the path and the move count together — the only place where they change, once per
-    /// click (a click while a move runs, or after the goal, does nothing). When the room or the placement fails, the
-    /// previous room, the open reading screen and the record stay and the reason is shown on the reading screen.
-    /// Opening and closing documents and walking inside a room never count as a move. Entering the goal headword's room
-    /// finishes the run. A headword's room is resolved once and kept, so a revisited room has the same lecterns in the
-    /// same places. Play UI shows headwords only; the logs add SenseIds to tell documents apart.
+    /// Moving (TryTravel — a link click now, a destination confirmed by a co-op host later): the destination room data
+    /// is checked first, then input is locked (reading screen, Escape menu, walking) and the screen fades to black.
+    /// In the dark the room title, the desks and lecterns and their documents are replaced and the player is placed at
+    /// the room center facing side 0; only then are the reading screen closed and the current word, the path and the
+    /// move count updated — the only place where they change, once per move. The screen fades back in and input
+    /// returns. When furnishing or placing fails, the previous room is furnished again, the player put back where it
+    /// stood, the reading screen stays open with the reason and the record is untouched. Opening and closing documents
+    /// and walking inside a room never count as a move. Entering the goal headword's room finishes the run.
+    /// The logical room (ShelfWordRoom: headword and documents) is resolved once per headword and kept apart from the
+    /// physical room; its placement depends on the document count only, so a revisited room — or the same room on
+    /// another client — has the same lecterns in the same places. Play UI shows headwords only; the logs add SenseIds.
     /// Reuses FirstPersonPlayer for walking, look, cursor and E; PlayHint canvases show the aim hint and the status.
     /// </summary>
     [DisallowMultipleComponent]
@@ -41,20 +45,31 @@ namespace WordRoom.Shelf
     {
         const int LabelWhole = 12;               // a first sentence up to this many letters is the title as is
         const int LabelTail = 10;                // else the last eojeols up to this many letters, after "…"
-        const float SlotMargin = 20f;            // open ground between the current room and the one being built
         const int ChallengeMinMoves = 10;        // a random challenge's shortest way, in links, is at least this
+        const string ReadHint = "[E] 읽기";       // the only aim hint: no title or preview before the book is opened
+        const float RelockSeconds = 0.3f;        // after control comes back, the cursor is locked again for this long
 
         [Header("장면 참조")]
         [Tooltip("표준국어대사전 데이터 패키지(StreamingAssets/WordRoomData). 비어 있으면 같은 오브젝트에서 찾습니다.")]
         [SerializeField] WordRoomDataService data;
         [Tooltip("1인칭 플레이어(이동·시점·E 입력 재사용)")]
         [SerializeField] FirstPersonPlayer player;
-        [Tooltip("방 표제어·독서대 표제 글꼴(한글 TMP 글꼴)")]
-        [SerializeField] TMP_FontAsset font;
         [Tooltip("화면 중앙 아래 안내([E] 읽기·성공 표시)")]
         [SerializeField] PlayHint hint;
         [Tooltip("좌상단 상태(시작·목표·현재·이동 횟수·경로)")]
         [SerializeField] PlayHint status;
+
+        [Header("독서실")]
+        [Tooltip("씬에 하나만 둔 팔각형 독서실(고정 모델). 방을 옮길 때 이 방의 제목과 가구만 바꿉니다.")]
+        [SerializeField] ShelfRoomView roomView;
+        [Tooltip("책상 프리팹(ReadingDesk). 한 면에 하나")]
+        [SerializeField] ShelfDesk deskPrefab;
+        [Tooltip("독서대 프리팹(ReadingStand). 뜻풀이 하나에 하나")]
+        [SerializeField] ShelfLectern lecternPrefab;
+        [Tooltip("독서대 위 펼친 책 프리팹(OpenBook_01~08). 독서대 순서대로 돌아가며 씁니다.")]
+        [SerializeField] ShelfBook[] bookPrefabs = new ShelfBook[0];
+        [Tooltip("방 이동 암전 화면. 비어 있으면 암전 없이 바로 바꿉니다.")]
+        [SerializeField] ShelfScreenFade fade;
 
         [Header("개발 확인용 고정 도전 (우클릭 메뉴로 예제 설정)")]
         [Tooltip("켜면 아래 시작·목표로 시작합니다(개발 확인용). 끄면 씬에 들어올 때마다 시작·목표를 무작위로 뽑습니다.")]
@@ -84,23 +99,24 @@ namespace WordRoom.Shelf
         [Tooltip("목표 도달 결과 화면(다시 도전). 비어 있으면 같은 오브젝트에서 찾고, 없으면 화면 아래 안내만 남습니다.")]
         [SerializeField] ShelfResultScreen resultScreen;
 
-        [Header("배치")]
+        [Header("배치·표시")]
         [SerializeField] ShelfLayout layout = new ShelfLayout();
-        [SerializeField] ShelfMaterials materials = new ShelfMaterials();
+        [Tooltip("화면 정중앙 조준점(탐색 중에만 표시). 비어 있으면 같은 오브젝트에서 찾습니다.")]
+        [SerializeField] ShelfCrosshair crosshair;
 
         readonly Dictionary<string, ShelfWordRoom> wordRooms = new Dictionary<string, ShelfWordRoom>();   // surface → room, or null
         readonly List<string> pathWords = new List<string>();    // headwords in order (HUD 경로)
         ShelfWordRoom startRoom;
         double runStart;                                         // realtime when the run first became playable
         bool timerStarted;                                       // runStart is set (once per run)
-        bool retrying;
-        bool traveling;
+        bool transitioning;                                      // a move or a retry runs (input locked)
+        bool wasExploring;                                       // Exploring as of the last LateUpdate
+        float relockUntil;                                       // unscaled time until which the cursor is locked again
+        bool relockWhileEscapeHeld;                              // the relock also lasts while that Escape is held
         WordRoomDataset dataset;
         Task<Setup> graphTask;                   // the one running computation of this component (null: none)
         CancellationTokenSource graphCancel;
         ShelfLinkGraph graph;
-        ShelfRoomBuilder builder;
-        ShelfRoomView current;
         int moves;
         bool reached;
         bool running;
@@ -121,9 +137,11 @@ namespace WordRoom.Shelf
             public int Seed;
         }
 
-        public string CurrentWord => current != null ? current.Room.Word : null;
+        public string CurrentWord => roomView != null && roomView.Room != null ? roomView.Room.Word : null;
         public int Moves => moves;
         public bool Reached => reached;
+        /// <summary>A room transition (move or retry) runs: input is locked and the screen fades.</summary>
+        public bool IsTransitioning => transitioning;
 
         void Reset()
         {
@@ -171,6 +189,7 @@ namespace WordRoom.Shelf
             if (reader == null) reader = GetComponent<ShelfReader>();
             if (pauseMenu == null) pauseMenu = GetComponent<ShelfPauseMenu>();
             if (resultScreen == null) resultScreen = GetComponent<ShelfResultScreen>();
+            if (crosshair == null) crosshair = GetComponent<ShelfCrosshair>();
         }
 
         void OnEnable()
@@ -183,20 +202,31 @@ namespace WordRoom.Shelf
         {
             if (data == null) Stop("WordRoomDataService 참조가 비어 있습니다");
             else if (player == null) Stop("FirstPersonPlayer 참조가 비어 있습니다");
-            else if (font == null) Stop("글꼴(TMP_FontAsset) 참조가 비어 있습니다");
             else if (reader == null) Stop("읽기 화면(ShelfReader) 참조가 비어 있습니다");
-            else SetHint("사전 불러오는 중…");
+            else if (roomView == null || !roomView.IsComplete) Stop("독서실(ShelfRoomView) 참조나 그 floor·furniture 참조가 비어 있습니다");
+            else if (deskPrefab == null || !deskPrefab.IsComplete) Stop("책상 프리팹(ShelfDesk) 참조나 그 model·top·body 참조가 비어 있습니다");
+            else if (lecternPrefab == null || !lecternPrefab.IsComplete) Stop("독서대 프리팹(ShelfLectern) 참조나 그 bookAnchor 참조가 비어 있습니다");
+            else if (!BooksComplete()) Stop("책 프리팹(ShelfBook) 참조가 비어 있거나 그 조준 Collider 참조가 비어 있습니다");
+            else
+            {
+                if (fade == null) Debug.LogWarning("[서가 시안] 암전 화면(ShelfScreenFade) 참조가 비어 있어 방을 옮길 때 암전 없이 바로 바꿉니다.", this);
+                SetHint("사전 불러오는 중…");
+            }
         }
 
         /// <summary>
         /// Leaving the scene, destroying the object or turning the component off cancels a running link computation and
-        /// drops it, so its result can never build a room. Turned on again before the start room exists, Update starts
-        /// a new computation with the current settings.
+        /// drops it, so its result can never furnish a room. Turned on again before the start room exists, Update
+        /// starts a new computation with the current settings. A transition in progress stops with the component
+        /// (its coroutine ends): the blackout is cleared and the locks it took are released.
         /// </summary>
         void OnDisable()
         {
             if (resultScreen != null) resultScreen.RetryRequested -= Retry;
             if (reader != null) reader.LinkClicked -= OnLinkClicked;
+            if (transitioning) AbortTransition();
+            if (crosshair != null) crosshair.Show(false);
+            wasExploring = false;
             if (graphTask == null) return;
             CancelGraph();
             if (!stopped) SetHint(null);
@@ -229,9 +259,42 @@ namespace WordRoom.Shelf
                 else if (data.TryGetDataset(out var d)) Begin(d);   // rooms only after the dictionary is loaded
                 return;
             }
+            if (transitioning) return;                           // locked: no aim, no E, no timer start in the dark
             TryStartTimer();                                     // first frame the player can really play
             UpdateAim();
         }
+
+        /// <summary>
+        /// Free exploration: the run goes on with no transition and no reading screen, Escape menu or result screen over
+        /// the room. Those screens own the mouse (cursor free); exploration owns it locked and hidden.
+        /// </summary>
+        bool Exploring => running && !stopped && !transitioning && !reader.IsOpen &&
+                          (pauseMenu == null || !pauseMenu.IsOpen) && (resultScreen == null || !resultScreen.IsShown);
+
+        /// <summary>
+        /// After every Update (the reading screen, the menus and the transition have settled the frame): the crosshair
+        /// shows exactly while exploring, and when exploration comes back — a book closed with Escape or its button, a
+        /// move finished, the menu or the result closed — the cursor is locked and hidden for RelockSeconds (and while
+        /// the Escape that closed a screen is still held), so mouse look works at once without a click even when the
+        /// player's own one-time relock is missed or the Editor resets the cursor on Escape. Outside that window a cursor
+        /// freed on purpose stays free.
+        /// </summary>
+        void LateUpdate()
+        {
+            var exploring = Exploring;
+            var escapeHeld = EscapeHeld();
+            if (exploring && !wasExploring)
+            {
+                relockUntil = Time.unscaledTime + RelockSeconds;
+                relockWhileEscapeHeld = escapeHeld;              // the Escape that closed a screen, until released
+            }
+            if (!escapeHeld) relockWhileEscapeHeld = false;
+            wasExploring = exploring;
+            if (exploring && (Time.unscaledTime < relockUntil || relockWhileEscapeHeld)) player.TryLockCursor();
+            if (crosshair != null) crosshair.Show(exploring && player.Placed);
+        }
+
+        static bool EscapeHeld() => UnityEngine.InputSystem.Keyboard.current != null && UnityEngine.InputSystem.Keyboard.current.escapeKey.isPressed;
 
         /// <summary>
         /// Snapshots the settings and starts the link graph and the challenge choice on a worker thread: a random start
@@ -289,8 +352,8 @@ namespace WordRoom.Shelf
         /// <summary>
         /// The link graph and the challenge are done: a random challenge needs a goal some room reaches (else the run
         /// stops with the reason); the fixed one checks the goal can be reached by a link. Then the start room must have
-        /// an exit, and it is built and the player placed. Only the current computation gets here (a cancelled one was
-        /// dropped).
+        /// an exit, and it is furnished and the player placed. Only the current computation gets here (a cancelled one
+        /// was dropped).
         /// </summary>
         void Ready(Task<Setup> task)
         {
@@ -354,12 +417,11 @@ namespace WordRoom.Shelf
             }
             if (start.ExitCount == 0)
             {
-                Stop($"시작 방 {start.Word}의 자료에 이동할 수 있는 링크가 없습니다.");   // before the room is built
+                Stop($"시작 방 {start.Word}의 자료에 이동할 수 있는 링크가 없습니다.");   // before the room is furnished
                 return;
             }
 
             startRoom = start;
-            builder = new ShelfRoomBuilder(layout, materials, font);
             if (!BeginRun(out var failure))
             {
                 Stop($"시작 방에 플레이어를 배치하지 못했습니다: {failure}");
@@ -369,32 +431,50 @@ namespace WordRoom.Shelf
             Debug.Log($"[서가 시안] 시작: {start.Word} → 목표 {goalSurface} · {Describe(start)}", this);
         }
 
-        /// <summary>
-        /// A new run of this challenge: the start room built again from the kept room (same lecterns and links), the
-        /// player placed at its center facing its front side, 0 moves, a path of the start room only, and the timer
-        /// reset to not started. It starts once the player can really play (TryStartTimer).
-        /// </summary>
+        /// <summary>The first run of this challenge: the start room placed (PlaceStart), then the run state set (CommitRun).</summary>
         bool BeginRun(out string failure)
+        {
+            if (!PlaceStart(out failure, out _)) return false;
+            CommitRun();
+            return true;
+        }
+
+        /// <summary>
+        /// Furnishes the start room from the kept room data (same lecterns and links) and places the player at its
+        /// center facing side 0. The run's moves, path, goal state and timer are not touched. `playerTouched` tells
+        /// whether PlaceAt was tried: it suspends the player when it fails; the earlier steps leave the player as it was.
+        /// </summary>
+        bool PlaceStart(out string failure, out bool playerTouched)
+        {
+            playerTouched = false;
+            if (!roomView.Furnish(startRoom, deskPrefab, lecternPrefab, bookPrefabs, layout, out failure) || !SafeCenter(out failure)) return false;
+            playerTouched = true;
+            return player.PlaceAt(roomView.Floor, out failure);
+        }
+
+        /// <summary>
+        /// The new run is decided (only after the start room is placed): 0 moves, a path of the start room only, goal not
+        /// reached and the timer reset to not started. It starts once the player can really play (TryStartTimer).
+        /// </summary>
+        void CommitRun()
         {
             timerStarted = false;                                // never the last run's start time
             runStart = 0d;
-            current = builder.Build(startRoom, Vector3.zero);
             moves = 0;
             reached = false;
             pathWords.Clear();
             pathWords.Add(startRoom.Word);
-            if (!SafeCenter(current, out failure) || !player.PlaceAt(current.Floor, out failure)) return false;
             TryStartTimer();                                     // playable right away: starts now
             SetHint(null);
             RefreshStatus();
-            return true;
         }
 
         /// <summary>
         /// Fixes the run's start time once, at the first moment FirstPersonPlayer.CanTakeInput is true (placed, window
         /// focused, no menu block and not in the frame it was lifted, walking not locked, cursor locked). Dictionary
         /// loading, the link graph and an Escape menu kept open over the placement are therefore not counted; once
-        /// started, time in the Escape menu and on the reading screen counts (the start time is never moved).
+        /// started, time in the Escape menu, on the reading screen and in room transitions counts (the start time is
+        /// never moved).
         /// </summary>
         void TryStartTimer()
         {
@@ -404,13 +484,12 @@ namespace WordRoom.Shelf
         }
 
         /// <summary>
-        /// The goal was entered: time, moves and path are fixed once, the challenge's personal bests (reading-room
-        /// version key) updated and saved, and the result screen shown (the Escape menu is closed and off meanwhile).
-        /// Without a usable result screen the success hint stays on screen and the menu comes back.
+        /// The goal was entered: time (fixed at the goal entry), moves and path are recorded once, the challenge's personal
+        /// bests (reading-room version key) updated and saved, and the result screen shown (the Escape menu is closed and
+        /// off meanwhile). Without a usable result screen the success hint stays on screen and the menu comes back.
         /// </summary>
-        void Finish()
+        void Finish(double seconds)
         {
-            var seconds = timerStarted ? Time.realtimeSinceStartupAsDouble - runStart : 0d;   // fixed at the goal entry
             var challenge = ShelfRecords.ReadingKey(startRoom.Word, goalSurface);
             var best = ShelfRecords.Submit(challenge, seconds, moves, out var newTime, out var newMoves);
             Debug.Log($"[서가 시안] 기록 확정 {challenge}: {seconds:0.0}초 · 이동 {moves}회 · {string.Join(" → ", pathWords)}" +
@@ -425,65 +504,95 @@ namespace WordRoom.Shelf
         }
 
         /// <summary>
-        /// 다시 도전: the same challenge from the start in this scene (no scene load). The goal room goes, the start room
-        /// is built again from the same room data, and the dictionary, the link graph and the saved bests are reused.
-        /// Taken once per result (the button is disabled at the press and only a finished run can be retried).
+        /// 다시 도전: the same challenge from the start in this scene (no scene load) and in the same room model, behind
+        /// the blackout. Only once the start room is furnished and the player placed at its center is the result closed
+        /// and the new run decided (0 moves; the timer starts when the player can play again); the dictionary, the link
+        /// graph and the saved bests are reused. When the placement fails, the finished room's furniture comes back (and
+        /// the player where it stood, if it was moved), the blackout clears and the same result stays — time, moves, path
+        /// and bests untouched, input still blocked and the cursor free — with the reason and 다시 도전 usable again.
+        /// Taken once per press (the button is disabled at the press and only a finished run can be retried).
         /// </summary>
         void Retry()
         {
-            if (!running || !reached || retrying) return;
-            retrying = true;
-            try
+            if (!running || !reached || transitioning) return;
+            StartCoroutine(RetryRoutine());
+        }
+
+        IEnumerator RetryRoutine()
+        {
+            var finished = roomView.Room;
+            var keepPosition = player.transform.position;
+            var keepRotation = player.transform.rotation;
+            Lock();
+            yield return FadeOut();
+            if (!PlaceStart(out var failure, out var playerTouched))
             {
-                if (resultScreen != null) resultScreen.Hide();
-                if (reader != null) reader.Close();
-                if (current != null)
+                var restored = roomView.Furnish(finished, deskPrefab, lecternPrefab, bookPrefabs, layout, out var restoreWhy);
+                if (restored && playerTouched)
                 {
-                    current.gameObject.SetActive(false);         // its colliders go now, before the new start room is placed
-                    Destroy(current.gameObject);
+                    restored = player.PlaceAt(roomView.Floor, out restoreWhy) && player.MoveOnto(roomView.transform, keepPosition, out restoreWhy);
+                    if (restored) player.transform.rotation = keepRotation;
                 }
-                current = null;
-                if (!BeginRun(out var failure))
+                if (!restored)
                 {
-                    Stop($"다시 도전: 시작 방에 플레이어를 배치하지 못했습니다: {failure}");
-                    return;
+                    AbortTransition();
+                    Stop($"다시 도전 실패 후 완료한 방 {finished.Word}을(를) 되돌리지 못했습니다: {restoreWhy}");
+                    yield break;
                 }
-                if (pauseMenu != null) pauseMenu.enabled = true;
-                Debug.Log($"[서가 시안] 다시 도전: {startRoom.Word} → 목표 {goalSurface}", this);
+                Debug.LogWarning($"[서가 시안] 다시 도전하지 않습니다: 시작 방 {startRoom.Word}을(를) 준비하지 못했습니다({failure}). 결과·기록은 그대로입니다.", this);
+                yield return FadeIn();
+                transitioning = false;                           // the result keeps the input block; no Escape menu over it
+                reader.SetLocked(false);
+                if (resultScreen != null) resultScreen.ShowRetryFailure($"다시 도전하지 못했습니다 — {failure}");
+                yield break;
             }
-            finally
-            {
-                retrying = false;
-            }
+            if (resultScreen != null) resultScreen.Hide();
+            reader.Close();
+            player.SetInputBlocked(true);                        // Hide gave input back; keep it until the room shows
+            CommitRun();
+            Debug.Log($"[서가 시안] 다시 도전: {startRoom.Word} → 목표 {goalSurface} · 독서대 {roomView.Lecterns.Count}개 · 책상 {roomView.ActiveDeskCount}개", this);
+            yield return Hold();
+            yield return FadeIn();
+            Unlock();
         }
 
         // ---- lecterns and reading ----------------------------------------------------------------------------------
 
+        bool BooksComplete()
+        {
+            if (bookPrefabs == null || bookPrefabs.Length == 0) return false;
+            foreach (var b in bookPrefabs)
+                if (b == null || !b.IsComplete) return false;
+            return true;
+        }
+
         /// <summary>
-        /// "[E] 읽기" while the player stands in the reading area of a lectern of the current room and the
-        /// screen-center ray finds it; E opens that lectern's document only.
+        /// Exactly "[E] 읽기" while the screen-center ray finds an open book of the room within the interact distance and
+        /// the player stands in its stand's reading area; hidden otherwise. Nothing of the document shows before E: E
+        /// opens the aimed book's document and its links on the reading screen.
         /// </summary>
         void UpdateAim()
         {
             if (reached)
             {
                 if (resultScreen != null && resultScreen.IsShown) SetHint(null);
-                else SetHint($"목표 도달 성공 · {startRoom.Word} → {current.Room.Word} · 이동 {moves}회");
+                else SetHint($"목표 도달 성공 · {startRoom.Word} → {CurrentWord} · 이동 {moves}회");
                 return;
             }
-            if (reader.IsOpen || !player.CanInteract || !player.TryGetAimed(layout.interactDistance, out ShelfLectern lectern) ||
-                !lectern.transform.IsChildOf(current.transform) ||
-                !lectern.IsInReach(player.transform.position, layout.readRange, layout.lecternWidth))
+            ShelfLectern lectern = null;
+            if (reader.IsOpen || !player.CanInteract || !player.TryGetAimed(layout.interactDistance, out ShelfBook book) ||
+                (lectern = book.Holder) == null || lectern.Book != book || lectern.Document == null ||
+                !lectern.transform.IsChildOf(roomView.transform) || !lectern.IsInReach(player.transform.position, layout.readRange))
             {
                 SetHint(null);
                 return;
             }
-            SetHint($"[E] 읽기 · {lectern.Document.Title}");
+            SetHint(ReadHint);
             if (!player.InteractPressed) return;
             if (reader.Open(lectern.Document))
             {
                 SetHint(null);
-                Debug.Log($"[서가 시안] 읽기: {current.Room.Word}의 독서대 {lectern.Index + 1} '{lectern.Document.Title}' " +
+                Debug.Log($"[서가 시안] 읽기: {CurrentWord}의 독서대 {lectern.Index + 1} '{lectern.Document.Title}' " +
                           $"(항목 {lectern.Document.EntryId} · 뜻 {lectern.Document.SenseId} · 링크 {lectern.Document.LinkCount}개)", this);
             }
             else Debug.LogWarning("[서가 시안] 읽기 화면을 열지 못했습니다.", this);
@@ -492,103 +601,162 @@ namespace WordRoom.Shelf
         /// <summary>A link of the open document was clicked: one move at most, never while another runs or after the goal.</summary>
         void OnLinkClicked(string target)
         {
-            if (!running || reached || traveling || retrying || current == null || reader == null || !reader.IsOpen) return;
-            traveling = true;
-            try
-            {
-                Travel(target);
-            }
-            finally
-            {
-                traveling = false;
-            }
+            if (reader == null || !reader.IsOpen) return;
+            TryTravel(target);
         }
 
         /// <summary>
-        /// The one place where the current room, the path and the move count change. The destination is built apart
-        /// from the current room, its center floor checked and the player placed there; only then is the previous room
-        /// removed, the reading screen closed and the record updated. Any failure before that keeps everything as it
-        /// was (the new room removed) and shows the reason on the reading screen.
+        /// Starts the move to `headword`'s room through the blackout (a link click now; later the destination a co-op
+        /// host confirmed, which goes through the same flow). The destination room data is checked before anything is
+        /// locked: false when no run is going on, a transition runs, the goal was reached, or the destination is
+        /// refused (the reason is shown on the reading screen when it is open, and nothing changes).
         /// </summary>
-        void Travel(string target)
+        public bool TryTravel(string headword)
         {
-            var from = current;
-            var room = RoomOf(target);
+            if (!running || reached || transitioning || stopped || string.IsNullOrWhiteSpace(headword) || roomView.Room == null) return false;
+            var room = RoomOf(headword.Trim());
             if (room == null)
             {
-                Fail(target, $"'{target}' 방의 뜻풀이를 사전 패키지에서 찾지 못했습니다");
-                return;
+                Fail(headword, $"'{headword}' 방의 뜻풀이를 사전 패키지에서 찾지 못했습니다");
+                return false;
             }
             if (room.Documents.Count == 0 && !IsGoal(room.Word))
             {
-                Fail(target, $"'{room.Word}' 방에 이동 링크가 있는 자료가 없습니다");     // the graph never links such a room
-                return;
+                Fail(headword, $"'{room.Word}' 방에 이동 링크가 있는 자료가 없습니다");     // the graph never links such a room
+                return false;
             }
-            var nextApothem = builder.ApothemOf(room.Documents.Count);
-            var x = from.transform.position.x;
-            var step = from.Apothem + nextApothem + 2f * layout.wallThickness + SlotMargin;
-            var next = builder.Build(room, new Vector3(x > 0f ? x - step : x + step, 0f, 0f));
-            if (!SafeCenter(next, out var why))
-            {
-                Discard(next);
-                Fail(target, $"'{room.Word}' 방 중앙에 설 자리가 없습니다: {why}");
-                return;
-            }
+            StartCoroutine(TravelRoutine(room));
+            return true;
+        }
 
+        /// <summary>
+        /// The one place where the current room, the path and the move count change. Order: lock input → fade out →
+        /// room title, desks, lecterns and documents replaced → player placed at the center → (success) reading screen
+        /// closed and the record updated once → fade in → input back. A failure in the dark furnishes the previous
+        /// room again, puts the player back where it stood and keeps the reading screen and the record.
+        /// </summary>
+        IEnumerator TravelRoutine(ShelfWordRoom room)
+        {
+            var from = roomView.Room;
             var keepPosition = player.transform.position;
             var keepRotation = player.transform.rotation;
-            if (!player.PlaceAt(next.Floor, out why))
+            Lock();
+            yield return FadeOut();
+
+            var safe = roomView.Furnish(room, deskPrefab, lecternPrefab, bookPrefabs, layout, out var why) && SafeCenter(out why);
+            var moved = safe && player.PlaceAt(roomView.Floor, out why);
+            if (!moved)
             {
-                Discard(next);
-                // PlaceAt suspended the player: back onto the previous room where it stood (the view comes back level).
-                if (player.PlaceAt(from.Floor, out _) && player.MoveOnto(from.transform, keepPosition, out _)) player.transform.rotation = keepRotation;
-                Fail(target, $"'{room.Word}' 방에 플레이어를 배치하지 못했습니다: {why}");
-                return;
+                // The previous room's furniture comes back in the same places. The player was only touched when
+                // PlaceAt itself failed (it suspends the player): then it is placed again and put back where it stood.
+                var restored = roomView.Furnish(from, deskPrefab, lecternPrefab, bookPrefabs, layout, out var restoreWhy);
+                if (restored && safe)
+                {
+                    restored = player.PlaceAt(roomView.Floor, out restoreWhy) && player.MoveOnto(roomView.transform, keepPosition, out restoreWhy);
+                    if (restored) player.transform.rotation = keepRotation;
+                }
+                Fail(room.Word, $"'{room.Word}' 방을 준비하지 못했습니다: {why}");
+                if (!restored)
+                {
+                    AbortTransition();
+                    Stop($"이동 실패 후 이전 방 {from.Word}을(를) 되돌리지 못했습니다: {restoreWhy}");
+                    yield break;
+                }
+                yield return FadeIn();
+                Unlock();
+                yield break;
             }
 
-            from.gameObject.SetActive(false);                    // its colliders go now
-            Destroy(from.gameObject);
-            current = next;
             reader.Close();
+            player.SetInputBlocked(true);                        // Close gave input back; keep it until the fade in ends
             moves++;
             pathWords.Add(room.Word);
             reached = IsGoal(room.Word);
-            Debug.Log($"[서가 시안] 이동: {from.Room.Word} → {room.Word} (이동 {moves}회, 독서대 {room.Documents.Count}개, 출구 {room.ExitCount}개)" +
+            var seconds = timerStarted ? Time.realtimeSinceStartupAsDouble - runStart : 0d;   // fixed at the goal entry
+            Debug.Log($"[서가 시안] 이동: {from.Word} → {room.Word} (이동 {moves}회, 독서대 {room.Documents.Count}개 · 책상 {roomView.ActiveDeskCount}개, 출구 {room.ExitCount}개)" +
                       $"{(reached ? " · 목표 도달 성공" : "")} · {Describe(room)}", this);
             SetHint(null);
             RefreshStatus();
-            if (reached) Finish();                               // once: a reached run takes no more links
+            yield return Hold();
+            yield return FadeIn();
+            Unlock();
+            if (reached) Finish(seconds);                        // once: a reached run takes no more links
+        }
+
+        /// <summary>Input locked for a transition: reading screen controls, Escape menu, walking and look.</summary>
+        void Lock()
+        {
+            transitioning = true;
+            SetHint(null);
+            reader.SetLocked(true);
+            if (pauseMenu != null)
+            {
+                pauseMenu.Close();
+                pauseMenu.enabled = false;
+            }
+            player.SetInputBlocked(true);
+        }
+
+        /// <summary>Input back: the reading screen keeps the block while it is still open (a failed move).</summary>
+        void Unlock()
+        {
+            transitioning = false;
+            reader.SetLocked(false);
+            if (!reader.IsOpen) player.SetInputBlocked(false);   // from the next frame; the cursor locks again then
+            if (pauseMenu != null && !reached) pauseMenu.enabled = true;
+        }
+
+        /// <summary>A transition ended early (component off, run stopped): no blackout left, locks released.</summary>
+        void AbortTransition()
+        {
+            StopAllCoroutines();
+            if (fade != null) fade.Clear();
+            transitioning = false;
+            if (reader != null)
+            {
+                reader.SetLocked(false);
+                if (!reader.IsOpen && player != null) player.SetInputBlocked(false);
+            }
+        }
+
+        IEnumerator FadeOut()
+        {
+            if (fade != null) yield return fade.FadeOut();
+        }
+
+        IEnumerator FadeIn()
+        {
+            if (fade != null) yield return fade.FadeIn();
+        }
+
+        IEnumerator Hold()
+        {
+            if (fade != null && fade.HoldSeconds > 0f) yield return new WaitForSecondsRealtime(fade.HoldSeconds);
         }
 
         void Fail(string target, string reason)
         {
-            Debug.LogWarning($"[서가 시안] 이동하지 않습니다({current.Room.Word} → {target}): {reason}. 현재 방·읽기 화면·이동 기록은 그대로입니다.", this);
-            reader.ShowNotice($"이동하지 못했습니다 — {reason}");
-        }
-
-        static void Discard(ShelfRoomView room)
-        {
-            room.gameObject.SetActive(false);
-            Destroy(room.gameObject);
-            Physics.SyncTransforms();
+            Debug.LogWarning($"[서가 시안] 이동하지 않습니다({CurrentWord} → {target}): {reason}. 현재 방·읽기 화면·이동 기록은 그대로입니다.", this);
+            if (reader != null) reader.ShowNotice($"이동하지 못했습니다 — {reason}");
         }
 
         /// <summary>
         /// The room center is a safe place for the player: the first floor below it (from body height, the player's own
-        /// colliders skipped, as FirstPersonPlayer.PlaceAt looks) is this room's floor, and a body there touches nothing
-        /// else. Checked before the player is moved, so a failure leaves the player as it was.
+        /// colliders skipped, as FirstPersonPlayer.PlaceAt looks) is the room's floor, and a body there touches nothing
+        /// else (no desk or lectern). Checked before the player is moved, so a failure leaves the player as it was.
         /// </summary>
-        bool SafeCenter(ShelfRoomView room, out string failure)
+        bool SafeCenter(out string failure)
         {
             Physics.SyncTransforms();
             var body = player.GetComponent<CharacterController>();
             var height = body != null ? body.height : 1.8f;
             var radius = body != null ? body.radius : 0.3f;
-            var center = room.Floor.position;
+            var floorRoot = roomView.Floor;
+            var center = floorRoot.position;
             RaycastHit? floor = null;
             foreach (var h in Physics.RaycastAll(center + Vector3.up * height, Vector3.down, height * 2f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
                 if (!h.collider.transform.IsChildOf(player.transform) && (floor == null || h.distance < floor.Value.distance)) floor = h;
-            if (floor == null || !floor.Value.collider.transform.IsChildOf(room.Floor))
+            if (floor == null || !floor.Value.collider.transform.IsChildOf(floorRoot))
             {
                 failure = floor == null ? "중앙 아래에 바닥이 없습니다" : $"중앙 아래 첫 Collider '{floor.Value.collider.name}'가 이 방의 바닥이 아닙니다";
                 return false;
@@ -597,7 +765,7 @@ namespace WordRoom.Shelf
             var bottom = feet + Vector3.up * (radius + 0.1f);
             var top = feet + Vector3.up * Mathf.Max(radius + 0.1f, height - radius);
             foreach (var c in Physics.OverlapCapsule(bottom, top, radius, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
-                if (!c.transform.IsChildOf(player.transform) && c.transform != room.Floor)
+                if (!c.transform.IsChildOf(player.transform) && !c.transform.IsChildOf(floorRoot))
                 {
                     failure = $"중앙에 '{c.name}'가 있습니다";
                     return false;
@@ -770,10 +938,7 @@ namespace WordRoom.Shelf
             var sb = new StringBuilder();
             sb.Append("시작  ").Append(startRoom.Word).Append('\n');
             sb.Append("목표  ").Append(goalSurface).Append('\n');
-            sb.Append("현재  ").Append(current.Room.Word).Append('\n');
-            sb.Append("이동  ").Append(moves).Append("회\n");
-            sb.Append("경로  ").Append(string.Join(" → ", pathWords));
-            if (reached) sb.Append('\n').Append("<color=#").Append(ColorUtility.ToHtmlStringRGB(materials.linkColor)).Append(">목표 도달 성공</color>");
+            sb.Append("현재  ").Append(CurrentWord);            // moves: result screen; path: console log
             status.Set(sb.ToString());
         }
 
@@ -789,6 +954,7 @@ namespace WordRoom.Shelf
             stopped = true;
             Debug.LogError($"[서가 시안] 시작하지 않습니다: {failure}", this);
             SetHint(failure);
+            if (crosshair != null) crosshair.Show(false);
             enabled = false;
         }
     }

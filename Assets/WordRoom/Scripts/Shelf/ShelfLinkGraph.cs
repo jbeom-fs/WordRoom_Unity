@@ -39,6 +39,7 @@ namespace WordRoom.Shelf
         readonly List<RoomRule> roomRules;
         readonly Dictionary<string, int> candidates = new Dictionary<string, int>();  // surface → rank, or -1
         readonly Dictionary<string, bool> entries = new Dictionary<string, bool>();   // surface → registered headword
+        readonly HashSet<(string, string)> parallelUses = new HashSet<(string, string)>();
         readonly List<int> rooms = new List<int>();            // candidate room ranks, in rank order
         readonly List<int>[] exitsOf;                          // room rank → its distinct link word ranks (before validity)
         readonly List<int>[] linkedFrom;                       // link word rank → rooms having it as a link word (each once)
@@ -67,6 +68,12 @@ namespace WordRoom.Shelf
             distance = new int[d.WordCount];
             exitsOf = new List<int>[d.WordCount];
             linkedFrom = new List<int>[d.WordCount];
+            for (var row = 0; row < d.SenseCount; row++)
+            {
+                cancel.ThrowIfCancellationRequested();
+                var definition = d.GetSense(row).Definition;
+                if (!string.IsNullOrEmpty(definition)) ShelfLinkText.AddParallelUses(definition, IsEntry, parallelUses);
+            }
             Build(cancel);
         }
 
@@ -92,7 +99,10 @@ namespace WordRoom.Shelf
         /// exceptions of the sense `senseId`, then keep link candidates.
         /// </summary>
         public List<ShelfTextPart> Extract(string displayDefinition, string senseId) =>
-            ShelfLinkText.FindCandidates(displayDefinition, senseId, IsEntry, IsCandidate);
+            ShelfLinkText.FindCandidates(displayDefinition, senseId, IsEntry, IsCandidate, HasParallelUse);
+
+        bool HasParallelUse(string first, string second) =>
+            parallelUses.Contains((first, second)) || parallelUses.Contains((second, first));
 
         /// <summary>Split exceptions that are ignored because their headword is not the eojeol's start or not registered.</summary>
         public List<string> ExceptionProblems() => ShelfLinkText.ExceptionProblems(IsEntry);
@@ -294,6 +304,20 @@ namespace WordRoom.Shelf
         {
             var rank = CandidateRank(surface);
             return rank >= 0 && valid[rank];
+        }
+
+        /// <summary>
+        /// Headwords of the room's exits that lead to a valid room for the current goal: the connections the graph's
+        /// distances use. Equal to the link targets of Doors over the room's senses (the reading screen's links).
+        /// </summary>
+        internal HashSet<string> ValidExits(string surface)
+        {
+            var set = new HashSet<string>();
+            var rank = CandidateRank(surface);
+            if (rank < 0 || exitsOf[rank] == null) return set;
+            foreach (var t in exitsOf[rank])
+                if (valid[t]) set.Add(d.GetWord(t));
+            return set;
         }
 
         /// <summary>The links of a sense (offsets in its display definition): its candidate links that lead to a valid room, first place each.</summary>

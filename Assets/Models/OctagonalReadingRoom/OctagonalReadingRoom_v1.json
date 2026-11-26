@@ -1,0 +1,690 @@
+{
+  "source": "Art/Blender/OctagonalReadingRoom_v1.blend",
+  "grainU": 4.0,
+  "grainV": 1.0,
+  "materials": [
+    {
+      "source": "Binding | Bottle green",
+      "name": "Binding_Bottle_green",
+      "baseColor": [
+        0.04100000113248825,
+        0.07999999821186066,
+        0.050999999046325684
+      ],
+      "roughness": 0.6800000071525574,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": ""
+    },
+    {
+      "source": "Binding | Clove",
+      "name": "Binding_Clove",
+      "baseColor": [
+        0.10300000011920929,
+        0.0560000017285347,
+        0.032999999821186066
+      ],
+      "roughness": 0.6800000071525574,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": ""
+    },
+    {
+      "source": "Binding | Cordovan",
+      "name": "Binding_Cordovan",
+      "baseColor": [
+        0.16500000655651093,
+        0.041999999433755875,
+        0.02500000037252903
+      ],
+      "roughness": 0.6800000071525574,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": ""
+    },
+    {
+      "source": "Binding | Lichen",
+      "name": "Binding_Lichen",
+      "baseColor": [
+        0.12600000202655792,
+        0.13300000131130219,
+        0.06300000101327896
+      ],
+      "roughness": 0.6800000071525574,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": ""
+    },
+    {
+      "source": "Binding | Madder",
+      "name": "Binding_Madder",
+      "baseColor": [
+        0.12200000137090683,
+        0.028999999165534973,
+        0.02500000037252903
+      ],
+      "roughness": 0.6800000071525574,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": ""
+    },
+    {
+      "source": "Binding | Olive",
+      "name": "Binding_Olive",
+      "baseColor": [
+        0.09200000017881393,
+        0.11100000143051147,
+        0.04600000008940697
+      ],
+      "roughness": 0.6800000071525574,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": ""
+    },
+    {
+      "source": "Binding | Parchment",
+      "name": "Binding_Parchment",
+      "baseColor": [
+        0.23600000143051147,
+        0.15199999511241913,
+        0.07100000232458115
+      ],
+      "roughness": 0.6800000071525574,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": ""
+    },
+    {
+      "source": "Binding | Russet",
+      "name": "Binding_Russet",
+      "baseColor": [
+        0.210999995470047,
+        0.07599999755620956,
+        0.04100000113248825
+      ],
+      "roughness": 0.6800000071525574,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": ""
+    },
+    {
+      "source": "Binding | Tobacco",
+      "name": "Binding_Tobacco",
+      "baseColor": [
+        0.1770000010728836,
+        0.11900000274181366,
+        0.04399999976158142
+      ],
+      "roughness": 0.6800000071525574,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": ""
+    },
+    {
+      "source": "Bookbindery | faded gilt",
+      "name": "Bookbindery_faded_gilt",
+      "baseColor": [
+        0.3499999940395355,
+        0.2290000021457672,
+        0.0820000022649765
+      ],
+      "roughness": 0.5199999809265137,
+      "metallic": 0.4699999988079071,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": ""
+    },
+    {
+      "source": "Ceiling | burnished edging",
+      "name": "Ceiling_burnished_edging",
+      "baseColor": [
+        0.09959999471902847,
+        0.039500001817941666,
+        0.016170000657439232
+      ],
+      "roughness": 0.39500001072883606,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Ceiling_burnished_edging.png"
+    },
+    {
+      "source": "Ceiling | dark walnut",
+      "name": "Ceiling_dark_walnut",
+      "baseColor": [
+        0.049799997359514236,
+        0.0173799991607666,
+        0.006929999683052301
+      ],
+      "roughness": 0.45500001311302185,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Ceiling_dark_walnut.png"
+    },
+    {
+      "source": "Ceiling | walnut",
+      "name": "Ceiling_walnut",
+      "baseColor": [
+        0.07719000428915024,
+        0.028439998626708984,
+        0.011549999937415123
+      ],
+      "roughness": 0.4449999928474426,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Ceiling_walnut.png"
+    },
+    {
+      "source": "Ceiling | warm lime plaster",
+      "name": "Ceiling_warm_lime_plaster",
+      "baseColor": [
+        0.23999999463558197,
+        0.18000000715255737,
+        0.11500000208616257
+      ],
+      "roughness": 0.8799999952316284,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": ""
+    },
+    {
+      "source": "Glass | warm opal",
+      "name": "Glass_warm_opal",
+      "baseColor": [
+        0.7200000286102295,
+        0.4699999988079071,
+        0.18000000715255737
+      ],
+      "roughness": 0.3400000035762787,
+      "metallic": 0.0,
+      "emission": [
+        1.0,
+        0.5899999737739563,
+        0.25
+      ],
+      "emissionStrength": 2.200000047683716,
+      "texture": ""
+    },
+    {
+      "source": "Metal | aged brass",
+      "name": "Metal_aged_brass",
+      "baseColor": [
+        0.28999999165534973,
+        0.1550000011920929,
+        0.0430000014603138
+      ],
+      "roughness": 0.3199999928474426,
+      "metallic": 0.7599999904632568,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": ""
+    },
+    {
+      "source": "Metal | brown brass patina",
+      "name": "Metal_brown_brass_patina",
+      "baseColor": [
+        0.09200000017881393,
+        0.04600000008940697,
+        0.017999999225139618
+      ],
+      "roughness": 0.47999998927116394,
+      "metallic": 0.7099999785423279,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": ""
+    },
+    {
+      "source": "Oak | perimeter border",
+      "name": "Oak_perimeter_border",
+      "baseColor": [
+        0.10999999940395355,
+        0.04899999871850014,
+        0.020999999716877937
+      ],
+      "roughness": 0.4950000047683716,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Oak_perimeter_border.png"
+    },
+    {
+      "source": "Oak | waxed parquet 01",
+      "name": "Oak_waxed_parquet_01",
+      "baseColor": [
+        0.13824999332427979,
+        0.06793999671936035,
+        0.02923000045120716
+      ],
+      "roughness": 0.5049999952316284,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Oak_waxed_parquet_01.png"
+    },
+    {
+      "source": "Oak | waxed parquet 02",
+      "name": "Oak_waxed_parquet_02",
+      "baseColor": [
+        0.15399999916553497,
+        0.07568000257015228,
+        0.03255999833345413
+      ],
+      "roughness": 0.5049999952316284,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Oak_waxed_parquet_02.png"
+    },
+    {
+      "source": "Oak | waxed parquet 03",
+      "name": "Oak_waxed_parquet_03",
+      "baseColor": [
+        0.16975000500679016,
+        0.08342000097036362,
+        0.03589000180363655
+      ],
+      "roughness": 0.5049999952316284,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Oak_waxed_parquet_03.png"
+    },
+    {
+      "source": "Oak | waxed parquet 04",
+      "name": "Oak_waxed_parquet_04",
+      "baseColor": [
+        0.18025000393390656,
+        0.08857999742031097,
+        0.038109999150037766
+      ],
+      "roughness": 0.5049999952316284,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Oak_waxed_parquet_04.png"
+    },
+    {
+      "source": "Oak | waxed parquet 05",
+      "name": "Oak_waxed_parquet_05",
+      "baseColor": [
+        0.19425000250339508,
+        0.09545999765396118,
+        0.04106999933719635
+      ],
+      "roughness": 0.5049999952316284,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Oak_waxed_parquet_05.png"
+    },
+    {
+      "source": "Oak | waxed parquet 06",
+      "name": "Oak_waxed_parquet_06",
+      "baseColor": [
+        0.2134999930858612,
+        0.10491999983787537,
+        0.04513999819755554
+      ],
+      "roughness": 0.5049999952316284,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Oak_waxed_parquet_06.png"
+    },
+    {
+      "source": "Paper | foxed fore-edges",
+      "name": "Paper_foxed_fore_edges",
+      "baseColor": [
+        0.47999998927116394,
+        0.3449999988079071,
+        0.19499999284744263
+      ],
+      "roughness": 0.7900000214576721,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": ""
+    },
+    {
+      "source": "Parquet | shadow in joints",
+      "name": "Parquet_shadow_in_joints",
+      "baseColor": [
+        0.02199999988079071,
+        0.012000000104308128,
+        0.007000000216066837
+      ],
+      "roughness": 0.75,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": ""
+    },
+    {
+      "source": "Walnut | burnished arrises",
+      "name": "Walnut_burnished_arrises",
+      "baseColor": [
+        0.09959999471902847,
+        0.039500001817941666,
+        0.016170000657439232
+      ],
+      "roughness": 0.39500001072883606,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Walnut_burnished_arrises.png"
+    },
+    {
+      "source": "Walnut | dark carved molding",
+      "name": "Walnut_dark_carved_molding",
+      "baseColor": [
+        0.049799997359514236,
+        0.0173799991607666,
+        0.006929999683052301
+      ],
+      "roughness": 0.45500001311302185,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Walnut_dark_carved_molding.png"
+    },
+    {
+      "source": "Walnut | figured panels",
+      "name": "Walnut_figured_panels",
+      "baseColor": [
+        0.06225000321865082,
+        0.022120000794529915,
+        0.008469999767839909
+      ],
+      "roughness": 0.48500001430511475,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Walnut_figured_panels.png"
+    },
+    {
+      "source": "Walnut | old rubbed oil",
+      "name": "Walnut_old_rubbed_oil",
+      "baseColor": [
+        0.07719000428915024,
+        0.028439998626708984,
+        0.011549999937415123
+      ],
+      "roughness": 0.4449999928474426,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Walnut_old_rubbed_oil.png"
+    },
+    {
+      "source": "Walnut | shelf backs and grooves",
+      "name": "Walnut_shelf_backs_and_grooves",
+      "baseColor": [
+        0.04399000108242035,
+        0.0173799991607666,
+        0.009240000508725643
+      ],
+      "roughness": 0.5849999785423279,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Walnut_shelf_backs_and_grooves.png"
+    },
+    {
+      "source": "Walnut | writing surface",
+      "name": "Walnut_writing_surface",
+      "baseColor": [
+        0.09793999791145325,
+        0.040289998054504395,
+        0.017710000276565552
+      ],
+      "roughness": 0.5149999856948853,
+      "metallic": 0.0,
+      "emission": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "emissionStrength": 0.0,
+      "texture": "Walnut_writing_surface.png"
+    }
+  ],
+  "measurements": {
+    "worktopHeight": 0.75,
+    "deskRadius": 3.759999990463257,
+    "deskWidth": 1.6399999856948853,
+    "deskDepth": 0.7599997520446777,
+    "deskHeight": 0.75,
+    "standOffsetOnDesk": 0.015000104904174805,
+    "standWidth": 0.6919999718666077,
+    "standDepth": 0.326122522354126,
+    "standHeight": 0.22810989618301392,
+    "panelTiltDegrees": 32.0,
+    "textClearWidth": 0.6,
+    "textClearHeight": 0.258,
+    "wordAnchor": {
+      "x": 0.0,
+      "y": 0.13192778825759888,
+      "z": 0.0016980171203613281
+    },
+    "bookcaseInnerApothem": 4.914999961853027,
+    "floorTop": 0.0,
+    "floorHalfExtent": 5.070001125335693,
+    "ceilingHeight": 3.0,
+    "lamps": [
+      {
+        "x": 0.0,
+        "y": 2.810249924659729,
+        "z": 4.938999891281128
+      },
+      {
+        "x": 3.4924005270004272,
+        "y": 2.810249924659729,
+        "z": 3.4924001693725586
+      },
+      {
+        "x": 4.939000368118286,
+        "y": 2.810249924659729,
+        "z": -6.631016731262207e-07
+      },
+      {
+        "x": 3.4924005270004272,
+        "y": 2.810249924659729,
+        "z": -3.492400884628296
+      },
+      {
+        "x": -4.3213367462158203e-07,
+        "y": 2.810249924659729,
+        "z": -4.938999891281128
+      },
+      {
+        "x": -3.4923996925354004,
+        "y": 2.810249924659729,
+        "z": -3.492400884628296
+      },
+      {
+        "x": -4.93899941444397,
+        "y": 2.810249924659729,
+        "z": 1.0058283805847168e-06
+      },
+      {
+        "x": -3.4924017190933228,
+        "y": 2.810249924659729,
+        "z": 3.492398977279663
+      }
+    ],
+    "readingLights": [
+      {
+        "x": 0.0,
+        "y": 3.630000114440918,
+        "z": 2.549999952316284
+      },
+      {
+        "x": 1.8031224012374878,
+        "y": 3.630000114440918,
+        "z": 1.8031220436096191
+      },
+      {
+        "x": 2.549999952316284,
+        "y": 3.630000114440918,
+        "z": -1.1146403977591035e-07
+      },
+      {
+        "x": 1.8031222820281982,
+        "y": 3.630000114440918,
+        "z": -1.8031222820281982
+      },
+      {
+        "x": -2.229280795518207e-07,
+        "y": 3.630000114440918,
+        "z": -2.549999952316284
+      },
+      {
+        "x": -1.80312180519104,
+        "y": 3.630000114440918,
+        "z": -1.803122639656067
+      },
+      {
+        "x": -2.549999952316284,
+        "y": 3.630000114440918,
+        "z": 1.925196499996673e-07
+      },
+      {
+        "x": -1.803122878074646,
+        "y": 3.630000114440918,
+        "z": 1.803121566772461
+      }
+    ]
+  }
+}

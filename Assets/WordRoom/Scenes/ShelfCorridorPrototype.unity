@@ -20,7 +20,7 @@ RenderSettings:
   m_FogDensity: 0.01
   m_LinearFogStart: 0
   m_LinearFogEnd: 300
-  m_AmbientSkyColor: {r: 0.56, g: 0.53, b: 0.49, a: 1}
+  m_AmbientSkyColor: {r: 0.3, g: 0.25, b: 0.2, a: 1}
   m_AmbientEquatorColor: {r: 0.114, g: 0.125, b: 0.133, a: 1}
   m_AmbientGroundColor: {r: 0.047, g: 0.043, b: 0.035, a: 1}
   m_AmbientIntensity: 1
@@ -32,7 +32,7 @@ RenderSettings:
   m_FlareFadeSpeed: 3
   m_HaloTexture: {fileID: 0}
   m_SpotCookie: {fileID: 10001, guid: 0000000000000000e000000000000000, type: 0}
-  m_DefaultReflectionMode: 0
+  m_DefaultReflectionMode: 1
   m_DefaultReflectionResolution: 128
   m_ReflectionBounces: 1
   m_ReflectionIntensity: 1
@@ -134,6 +134,7 @@ GameObject:
   - component: {fileID: 410000007}
   - component: {fileID: 410000006}
   - component: {fileID: 410000008}
+  - component: {fileID: 410000009}
   m_Layer: 0
   m_Name: ShelfCorridorDemo
   m_TagString: Untagged
@@ -171,9 +172,21 @@ MonoBehaviour:
   m_EditorClassIdentifier: WordRoom.Shelf::WordRoom.Shelf.ShelfCorridorDemo
   data: {fileID: 410000005}
   player: {fileID: 410000024}
-  font: {fileID: 11400000, guid: 52be4e75225fdda49b530d9775753c59, type: 2}
   hint: {fileID: 410000004}
   status: {fileID: 410000013}
+  roomView: {fileID: 1269370220}
+  deskPrefab: {fileID: 1590234532056673314, guid: 6ca129a5d6873634bb01ce86a0355b2b, type: 3}
+  lecternPrefab: {fileID: 7848378383156763772, guid: c884bedbda983244ba052f46ef18235b, type: 3}
+  bookPrefabs:
+  - {fileID: 3110402164462385157, guid: 9af0b8b9f15d2884cb9fd9209d0559e5, type: 3}
+  - {fileID: 3969237410479436561, guid: 9d70f29a57327b9458db8d98a297927a, type: 3}
+  - {fileID: 461311338953789310, guid: 76694e26012482e41bca4223b58049c5, type: 3}
+  - {fileID: 5489075331308731185, guid: 9d87a9d31fdde90459a25284ea847a90, type: 3}
+  - {fileID: 4647588017805511594, guid: 1bc76f8a43d55c5449ce7a3d6d8945c9, type: 3}
+  - {fileID: 5204160479227638642, guid: e643541f2f6cf3e45b227b2367ae9942, type: 3}
+  - {fileID: 5487285371097872927, guid: 26a324173362c90438191106592b1274, type: 3}
+  - {fileID: 3375590912897548771, guid: b447e90a019935d41becd1b02c81b239, type: 3}
+  fade: {fileID: 1408084733}
   fixedChallenge: 0
   startWord: "\uC9C0\uAD6C"
   goalWord: "\uBA74\uC801"
@@ -218,26 +231,12 @@ MonoBehaviour:
   pauseMenu: {fileID: 410000007}
   resultScreen: {fileID: 410000006}
   layout:
-    apothem: 4
-    wallHeight: 3
-    wallThickness: 0.15
-    lecternInset: 1
-    lecternSpacing: 1.4
-    cornerMargin: 0.6
-    lecternWidth: 0.8
-    lecternHeight: 1.05
-    titleSize: 5
-    titleHeight: 2.62
+    edgeMargin: 0.06
+    minLecternGap: 0.06
+    deskWalkway: 0.75
     interactDistance: 2.5
     readRange: 1.6
-  materials:
-    wall: {fileID: 2100000, guid: 766b149b2f37a434187368f500a700d9, type: 2}
-    floor: {fileID: 2100000, guid: 98e4eb280c189f94da42076b1dd2af9d, type: 2}
-    lectern: {fileID: 2100000, guid: 7e62e17207ed9dd4495dc5dc065e880f, type: 2}
-    trim: {fileID: 2100000, guid: ddb5ea6782ac56940b9efbf034c09879, type: 2}
-    parchment: {fileID: 0}
-    textColor: {r: 0.18039216, g: 0.14117648, b: 0.105882354, a: 1}
-    linkColor: {r: 0.9490196, g: 0.76862746, b: 0.42745098, a: 1}
+  crosshair: {fileID: 410000009}
 --- !u!114 &410000004
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -291,6 +290,7 @@ MonoBehaviour:
   bestTimeText: {fileID: 1969020663}
   bestMovesText: {fileID: 1969020662}
   retryButton: {fileID: 1969020661}
+  noticeText: {fileID: 1969020667}
 --- !u!114 &410000007
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -320,7 +320,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: fc301c85d20e41d0b2e330c0f7587467, type: 3}
-  m_Name:
+  m_Name: 
   m_EditorClassIdentifier: WordRoom.Shelf::WordRoom.Shelf.ShelfReader
   player: {fileID: 410000024}
   display: {fileID: 410000072}
@@ -334,6 +334,23 @@ MonoBehaviour:
   linkColor: {r: 0.54901963, g: 0.2901961, b: 0.078431375, a: 1}
   hoverColor: {r: 0.6901961, g: 0.32156864, b: 0, a: 1}
   hoverGlow: {r: 0.9490196, g: 0.72156864, b: 0.2901961, a: 0.3764706}
+--- !u!114 &410000009
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 410000001}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ff96e167446b4b7992e6873e31a713f5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: WordRoom.Shelf::WordRoom.Shelf.ShelfCrosshair
+  gap: 4
+  armLength: 7
+  thickness: 2
+  color: {r: 1, g: 0.97, b: 0.9, a: 0.9}
+  edgeColor: {r: 0, g: 0, b: 0, a: 0.45}
 --- !u!1 &410000011
 GameObject:
   m_ObjectHideFlags: 0
@@ -411,7 +428,7 @@ Transform:
   m_GameObject: {fileID: 410000021}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0.7}
+  m_LocalPosition: {x: 0, y: 0.05, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -618,7 +635,7 @@ Light:
   serializedVersion: 12
   m_Type: 1
   m_Color: {r: 1, g: 0.96, b: 0.9, a: 1}
-  m_Intensity: 1.3
+  m_Intensity: 0.35
   m_Range: 10
   m_SpotAngle: 30
   m_InnerSpotAngle: 21.80208
@@ -842,6 +859,103 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
+--- !u!1001 &410000071
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 8550999189650215263, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+      propertyPath: m_Name
+      value: ShelfReaderCanvas
+      objectReference: {fileID: 0}
+    - target: {fileID: 8550999189650215263, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+      propertyPath: m_IsActive
+      value: 0
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+--- !u!1 &410000072 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 8550999189650215263, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+--- !u!223 &410000073 stripped
+Canvas:
+  m_CorrespondingSourceObject: {fileID: 5272085605032644662, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &410000074 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 6828190413569237856, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
+--- !u!114 &410000075 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 2195549178981426203, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
+--- !u!114 &410000076 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 4023489776384339479, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
+--- !u!114 &410000077 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 7284671722742521037, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4a7652c2617d43d3bc4dab28aa857972, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: WordRoom.Shelf::WordRoom.Shelf.ShelfScrollRect
+--- !u!114 &410000078 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 3388774087377329510, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
+--- !u!114 &410000079 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 1249143703223243517, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
+  m_PrefabInstance: {fileID: 410000071}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4e29b1a8efbd4b44bb3f3716e73f07ff, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Button
 --- !u!1001 &577961898
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -992,6 +1106,194 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4e29b1a8efbd4b44bb3f3716e73f07ff, type: 3}
   m_Name: 
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Button
+--- !u!1001 &1269370219
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 548572401172466985, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 548572401172466985, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 548572401172466985, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 548572401172466985, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 548572401172466985, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 548572401172466985, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 548572401172466985, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 548572401172466985, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 548572401172466985, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 548572401172466985, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 5673281684730121696, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+      propertyPath: m_Name
+      value: OctagonalReadingRoom
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 5370208252143250947, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 0}
+    - targetCorrespondingSourceObject: {fileID: 2212826105203761216, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 0}
+    - targetCorrespondingSourceObject: {fileID: 4402915643686408418, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 0}
+    - targetCorrespondingSourceObject: {fileID: 5027356437372343174, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 0}
+  m_SourcePrefab: {fileID: 100100000, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+--- !u!114 &1269370220 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 6017856106044866851, guid: 2bab8be37ae0403428d0299e6da50a23, type: 3}
+  m_PrefabInstance: {fileID: 1269370219}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fd98e8d0ffce4794b50089c1ab22b3d5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: WordRoom.Shelf::WordRoom.Shelf.ShelfRoomView
+--- !u!1001 &1408084732
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_Pivot.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_Pivot.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_AnchorMax.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_AnchorMax.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_AnchorMin.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_AnchorMin.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_SizeDelta.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_SizeDelta.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_AnchoredPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_AnchoredPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 212765720035088713, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 6398262943701716465, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+      propertyPath: m_Name
+      value: ShelfFadeCanvas
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+--- !u!114 &1408084733 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 709951355308858260, guid: 1e1fdf664c568f14fa5fef38a481d54d, type: 3}
+  m_PrefabInstance: {fileID: 1408084732}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8a05fbe8ace541c3b63c1e2c776ae725, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: WordRoom.Shelf::WordRoom.Shelf.ShelfScreenFade
 --- !u!1 &1705179242
 GameObject:
   m_ObjectHideFlags: 0
@@ -1237,103 +1539,17 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
---- !u!1001 &410000071
-PrefabInstance:
-  m_ObjectHideFlags: 0
-  serializedVersion: 2
-  m_Modification:
-    serializedVersion: 3
-    m_TransformParent: {fileID: 0}
-    m_Modifications:
-    - target: {fileID: 8550999189650215263, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
-      propertyPath: m_Name
-      value: ShelfReaderCanvas
-      objectReference: {fileID: 0}
-    - target: {fileID: 8550999189650215263, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
-      propertyPath: m_IsActive
-      value: 0
-      objectReference: {fileID: 0}
-    m_RemovedComponents: []
-    m_RemovedGameObjects: []
-    m_AddedGameObjects: []
-    m_AddedComponents: []
-  m_SourcePrefab: {fileID: 100100000, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
---- !u!1 &410000072 stripped
-GameObject:
-  m_CorrespondingSourceObject: {fileID: 8550999189650215263, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
-  m_PrefabInstance: {fileID: 410000071}
-  m_PrefabAsset: {fileID: 0}
---- !u!223 &410000073 stripped
-Canvas:
-  m_CorrespondingSourceObject: {fileID: 5272085605032644662, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
-  m_PrefabInstance: {fileID: 410000071}
-  m_PrefabAsset: {fileID: 0}
---- !u!114 &410000074 stripped
+--- !u!114 &1969020667 stripped
 MonoBehaviour:
-  m_CorrespondingSourceObject: {fileID: 6828190413569237856, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
-  m_PrefabInstance: {fileID: 410000071}
+  m_CorrespondingSourceObject: {fileID: 3095353954903494698, guid: 311a3f444f231c24d8e9628c6ae4ae44, type: 3}
+  m_PrefabInstance: {fileID: 1969020658}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 0}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
-  m_Name:
+  m_Name: 
   m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
---- !u!114 &410000075 stripped
-MonoBehaviour:
-  m_CorrespondingSourceObject: {fileID: 2195549178981426203, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
-  m_PrefabInstance: {fileID: 410000071}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 0}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
-  m_Name:
-  m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
---- !u!114 &410000076 stripped
-MonoBehaviour:
-  m_CorrespondingSourceObject: {fileID: 4023489776384339479, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
-  m_PrefabInstance: {fileID: 410000071}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 0}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
-  m_Name:
-  m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
---- !u!114 &410000077 stripped
-MonoBehaviour:
-  m_CorrespondingSourceObject: {fileID: 7284671722742521037, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
-  m_PrefabInstance: {fileID: 410000071}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 0}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 4a7652c2617d43d3bc4dab28aa857972, type: 3}
-  m_Name:
-  m_EditorClassIdentifier: WordRoom.Shelf::WordRoom.Shelf.ShelfScrollRect
---- !u!114 &410000078 stripped
-MonoBehaviour:
-  m_CorrespondingSourceObject: {fileID: 3388774087377329510, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
-  m_PrefabInstance: {fileID: 410000071}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 0}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
-  m_Name:
-  m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI
---- !u!114 &410000079 stripped
-MonoBehaviour:
-  m_CorrespondingSourceObject: {fileID: 1249143703223243517, guid: 1338407ccb62433b9776356956d93b3e, type: 3}
-  m_PrefabInstance: {fileID: 410000071}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 0}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 4e29b1a8efbd4b44bb3f3716e73f07ff, type: 3}
-  m_Name:
-  m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Button
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -1347,3 +1563,5 @@ SceneRoots:
   - {fileID: 1969020658}
   - {fileID: 1705179245}
   - {fileID: 410000071}
+  - {fileID: 1269370219}
+  - {fileID: 1408084732}

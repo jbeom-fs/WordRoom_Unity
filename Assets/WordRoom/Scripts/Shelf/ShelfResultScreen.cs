@@ -15,7 +15,8 @@ namespace WordRoom.Shelf
     /// at the goal entry. While shown it alone takes input: the player's input is blocked, the cursor is free and a
     /// full-screen overlay catches clicks (the demo turns the Escape menu off first). 다시 도전 is taken once per showing
     /// (the button is disabled at the press) and raises RetryRequested; the demo then hides this and starts the same
-    /// challenge again. The display is the scene's Shelf Result Canvas (prefab instance, inactive while hidden), saved
+    /// challenge again. When the new run cannot be placed, the demo keeps this result shown (ShowRetryFailure): the
+    /// reason appears under the button, 다시 도전 is usable again, input stays blocked and the cursor free. The display is the scene's Shelf Result Canvas (prefab instance, inactive while hidden), saved
     /// in the scene with its references. A screen that is not usable is never forced on: Show returns
     /// false (reported once) and the demo keeps its on-screen success hint instead.
     /// </summary>
@@ -34,6 +35,8 @@ namespace WordRoom.Shelf
         [SerializeField] TextMeshProUGUI bestTimeText;
         [SerializeField] TextMeshProUGUI bestMovesText;
         [SerializeField] Button retryButton;
+        [Tooltip("다시 도전 실패 사유(평소 숨김, 다시 도전 버튼 아래)")]
+        [SerializeField] TextMeshProUGUI noticeText;
 
         readonly List<ButtonBinding> bindings = new List<ButtonBinding>();
         bool ready;
@@ -95,6 +98,7 @@ namespace WordRoom.Shelf
                 return Unusable("결과 화면·Canvas·다시 도전 버튼 중 꺼진 것이 있음");
             }
             retryButton.interactable = true;
+            SetNotice(null);
             player.SetInputBlocked(true);
             blocking = true;
             FirstPersonPlayer.ReleaseCursor();
@@ -125,11 +129,39 @@ namespace WordRoom.Shelf
             return false;
         }
 
+        /// <summary>
+        /// 다시 도전 could not start: the same result stays with `reason` under the button and 다시 도전 can be pressed
+        /// again. The input block and the free cursor of the result stay (taken again if anything lifted them).
+        /// </summary>
+        public void ShowRetryFailure(string reason)
+        {
+            if (!shown) return;
+            SetNotice(reason);
+            retryButton.interactable = true;
+            player.SetInputBlocked(true);
+            blocking = true;
+            FirstPersonPlayer.ReleaseCursor();
+            ArchiveUi.Select(retryButton.gameObject);
+        }
+
+        void SetNotice(string text)
+        {
+            var on = !string.IsNullOrEmpty(text);
+            if (noticeText == null)
+            {
+                if (on) Debug.LogWarning($"[서가 결과] 안내 글자(noticeText) 참조가 비어 있어 화면에 표시하지 못했습니다: {text}", this);
+                return;
+            }
+            noticeText.text = on ? text : "";
+            if (noticeText.gameObject.activeSelf != on) noticeText.gameObject.SetActive(on);
+        }
+
         /// <summary>Hidden again; the player's input comes back (from the next frame).</summary>
         public void Hide()
         {
             if (!shown) return;
             shown = false;
+            SetNotice(null);
             if (display != null) display.SetActive(false);
             if (EventSystem.current != null) EventSystem.current.SetSelectedGameObject(null);
             if (blocking && player != null) player.SetInputBlocked(false);

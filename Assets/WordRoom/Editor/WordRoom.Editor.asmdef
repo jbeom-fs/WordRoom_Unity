@@ -6,7 +6,9 @@
         "WordRoom.Data.Validation",
         "WordRoom.Generation",
         "WordRoom.World",
-        "Unity.TextMeshPro"
+        "Unity.TextMeshPro",
+        "WordRoom.Shelf",
+        "UnityEngine.UI"
     ],
     "includePlatforms": [
         "Editor"
