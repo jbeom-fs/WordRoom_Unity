@@ -28,9 +28,8 @@ namespace WordRoom.Shelf
     }
 
     /// <summary>
-    /// Conservative rule-based link extraction from a definition. FindCandidates is the one entry point: the link graph
-    /// (ShelfLinkGraph.Extract → room exits and reachability) and the reading screen (the graph's Doors of each sense)
-    /// use its result, so a clickable link and a graph connection are always the same thing.
+    /// Display text and link ranges for a definition. The game uses the validated database for ranges.
+    /// FindCandidates provides the rule-based extraction used for comparison and regression checks.
     /// An eojeol (word unit) is a maximal run of letters and digits; spaces, punctuation and symbols (· % ㎢ …) are
     /// its boundaries, so no candidate ever joins the end of one eojeol to the start of the next ("바다의 경계" never
     /// gives "의경"). An eojeol gives at most one candidate, always a headword at its start; the candidate's Start and

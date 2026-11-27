@@ -191,7 +191,7 @@ MonoBehaviour:
   startWord: "\uC9C0\uAD6C"
   goalWord: "\uBA74\uC801"
   vocabularyLimit: 15000
-  doorMinLength: 2
+  challengeMinLength: 2
   rooms:
   - word: "\uD56D\uAD6C"
     senseId: 316979

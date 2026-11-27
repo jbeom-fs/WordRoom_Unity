@@ -8,15 +8,18 @@ namespace WordRoom.Shelf
     /// <summary>
     /// Which headword rooms can be left again, decided for the whole dictionary package, so the links shown in the
     /// reading screen and the rooms they lead to use the same result.
-    /// A link candidate is a package word within the top `vocabularyLimit`, at least `minLength` long, not restricted,
-    /// with a definition. A sense's link words are the candidates in its definition minus its own headword, limited to
-    /// its link setting's selection, one per headword (first place). A headword room is one room for all of its senses:
+    /// A room candidate is a package word within the top `vocabularyLimit`, at least RoomMinLength letters long
+    /// (GetWordLength), unrestricted and with a definition. Only room candidates are link targets, exits, travel
+    /// destinations and challenge starts or goals; a shorter headword stays plain text in the definition (its database
+    /// record is read but never used for a room). challengeMinLength only narrows the random draw on top of this.
+    /// Links come from the validated database. Each sense keeps eligible targets other than its own headword, limited
+    /// to its link setting's selection, one per target (first place). One room combines all senses of a headword:
     /// its exits are the link words of every sense together. A room is valid when it is the goal headword or at least
     /// one of its exits is a valid room. Computed as the largest such set: every room starts valid and rooms with no
     /// valid exit are removed until nothing changes (a removal can leave the rooms linking only to it without an exit).
     /// Rooms that only link among themselves in a loop stay valid, since each of them has an exit. Each room is removed
     /// at most once, so it always ends. A link word is shown as a link only when its room is valid.
-    /// The link words of every room (the costly part) are extracted once, in the constructor. SetGoal then decides the
+    /// Each sense's clickable parts are prepared once in the constructor. SetGoal then decides the
     /// valid rooms for one goal and, following the final links backwards from the goal (only links between valid rooms,
     /// exactly the links the parchments show), which rooms really lead to it: a room with exits that only loop among
     /// rooms never reaching the goal is no start. PickChallenge draws a goal with such rooms at a minimum shortest
@@ -33,13 +36,17 @@ namespace WordRoom.Shelf
             public HashSet<string> Links;
         }
 
+        /// <summary>Fewest letters (GetWordLength) of a headword that can be a room, apart from challengeMinLength.</summary>
+        public const int RoomMinLength = 2;
+
         readonly WordRoomDataset d;
         readonly int limit;
-        readonly int minLength;
+        readonly int challengeMinLength;
         readonly List<RoomRule> roomRules;
-        readonly Dictionary<string, int> candidates = new Dictionary<string, int>();  // surface → rank, or -1
-        readonly Dictionary<string, bool> entries = new Dictionary<string, bool>();   // surface → registered headword
-        readonly HashSet<(string, string)> parallelUses = new HashSet<(string, string)>();
+        readonly ShelfLinkDatabase database;
+        readonly bool[] candidates;
+        readonly string[] readingDefinitions;
+        readonly List<ShelfTextPart>[] linksBySense;           // room selection, resolved references and deduplication
         readonly List<int> rooms = new List<int>();            // candidate room ranks, in rank order
         readonly List<int>[] exitsOf;                          // room rank → its distinct link word ranks (before validity)
         readonly List<int>[] linkedFrom;                       // link word rank → rooms having it as a link word (each once)
@@ -58,65 +65,39 @@ namespace WordRoom.Shelf
         public int ReachingCount => reaching.Count;
 
         /// <param name="cancel">Checked while walking the room candidates; throws OperationCanceledException.</param>
-        public ShelfLinkGraph(WordRoomDataset dataset, int vocabularyLimit, int minLength, List<RoomRule> roomRules, CancellationToken cancel)
+        public ShelfLinkGraph(WordRoomDataset dataset, ShelfLinkDatabase database, int vocabularyLimit, int challengeMinLength,
+            List<RoomRule> roomRules, CancellationToken cancel)
         {
             d = dataset;
+            this.database = database ?? throw new ArgumentNullException(nameof(database));
             limit = vocabularyLimit;
-            this.minLength = minLength;
+            this.challengeMinLength = challengeMinLength;
             this.roomRules = roomRules;
+            candidates = new bool[d.WordCount];
+            readingDefinitions = new string[d.SenseCount];
+            linksBySense = new List<ShelfTextPart>[d.SenseCount];
             valid = new bool[d.WordCount];
             distance = new int[d.WordCount];
             exitsOf = new List<int>[d.WordCount];
             linkedFrom = new List<int>[d.WordCount];
-            for (var row = 0; row < d.SenseCount; row++)
+            for (var rank = 0; rank < Math.Min(limit, d.WordCount); rank++)
             {
                 cancel.ThrowIfCancellationRequested();
-                var definition = d.GetSense(row).Definition;
-                if (!string.IsNullOrEmpty(definition)) ShelfLinkText.AddParallelUses(definition, IsEntry, parallelUses);
+                candidates[rank] = d.GetWordLength(rank) >= RoomMinLength && !d.IsRestricted(rank) && HasDefinition(rank);
+                if (candidates[rank]) rooms.Add(rank);
             }
             Build(cancel);
         }
 
         // ---- candidates ----------------------------------------------------------------------------------------------
 
-        /// <summary>A link candidate surface (exact package surface meeting the vocabulary rules).</summary>
+        /// <summary>A room candidate surface (exact package surface meeting the vocabulary and length rules).</summary>
         public bool IsCandidate(string surface) => CandidateRank(surface) >= 0;
 
-        /// <summary>
-        /// A registered headword of the package, whatever its rank, length or restriction — for deciding where an
-        /// eojeol splits. The lookup normalizes, so the found surface must equal the spelling exactly.
-        /// </summary>
-        public bool IsEntry(string surface)
-        {
-            if (entries.TryGetValue(surface, out var ok)) return ok;
-            ok = d.TryGetWordRank(surface, out var rank) && d.GetWord(rank) == surface;
-            entries[surface] = ok;
-            return ok;
-        }
+        public IReadOnlyList<ShelfTextPart> DatabaseLinks(string senseId) => database.Get(senseId).Links;
 
-        /// <summary>
-        /// The one extraction used everywhere (graph, reading text, link log): split on headwords with the split
-        /// exceptions of the sense `senseId`, then keep link candidates.
-        /// </summary>
-        public List<ShelfTextPart> Extract(string displayDefinition, string senseId) =>
-            ShelfLinkText.FindCandidates(displayDefinition, senseId, IsEntry, IsCandidate, HasParallelUse);
-
-        bool HasParallelUse(string first, string second) =>
-            parallelUses.Contains((first, second)) || parallelUses.Contains((second, first));
-
-        /// <summary>Split exceptions that are ignored because their headword is not the eojeol's start or not registered.</summary>
-        public List<string> ExceptionProblems() => ShelfLinkText.ExceptionProblems(IsEntry);
-
-        int CandidateRank(string surface)
-        {
-            if (candidates.TryGetValue(surface, out var r)) return r;
-            r = d.TryGetWordRank(surface, out var rank) && d.GetWord(rank) == surface && IsCandidateRank(rank) ? rank : -1;
-            candidates[surface] = r;
-            return r;
-        }
-
-        bool IsCandidateRank(int rank) =>
-            rank < limit && d.GetWordLength(rank) >= minLength && !d.IsRestricted(rank) && HasDefinition(rank);
+        int CandidateRank(string surface) =>
+            d.TryGetWordRank(surface, out var rank) && d.GetWord(rank) == surface && candidates[rank] ? rank : -1;
 
         bool HasDefinition(int rank)
         {
@@ -130,9 +111,9 @@ namespace WordRoom.Shelf
         {
             if (!d.TryGetWordRank(surface, out var rank) || d.GetWord(rank) != surface) return "사전 패키지에 없는 표기";
             if (rank >= limit) return $"빈도 상위 {limit:N0}개 밖";
-            if (d.GetWordLength(rank) < minLength) return $"{minLength}글자 미만";
+            if (d.GetWordLength(rank) < RoomMinLength) return $"{RoomMinLength}글자 미만 표제어";
             if (d.IsRestricted(rank)) return "제한어";
-            return HasDefinition(rank) ? null : "뜻풀이 없음";
+            return candidates[rank] ? null : "뜻풀이 없음";
         }
 
         /// <summary>The link setting of a sense: the one with its senseId, else one of the word without a senseId.</summary>
@@ -149,19 +130,21 @@ namespace WordRoom.Shelf
         }
 
         /// <summary>
-        /// Link words of a sense before validity: candidates of its display definition (Han parentheses removed, see
-        /// ShelfLinkText.DisplayDefinition; positions are offsets in it) minus its own headword, selection applied,
-        /// first place each.
+        /// Prepares the reading definition and the links used by both the reader and the graph. Resolve references
+        /// before choosing the first link to each target, since a rewrite can cover a DB span.
         /// </summary>
-        List<ShelfTextPart> CandidateLinks(SenseInfo sense)
+        List<ShelfTextPart> PrepareLinks(SenseInfo sense, int number, int count)
         {
-            var list = new List<ShelfTextPart>();
-            if (string.IsNullOrEmpty(sense.Definition)) return list;
+            var entry = database.Get(sense.SenseId);
+            readingDefinitions[sense.Row] = ShelfLinkText.ResolveSelfReferences(
+                entry.Definition, sense.Word, number, count, entry.Links, out var moved);
+            if (moved.Count == 0) return null;
             var selection = RuleOf(sense.Word, sense.SenseId)?.Links;
+            var list = new List<ShelfTextPart>();
             var seen = new HashSet<string>();
-            foreach (var c in Extract(ShelfLinkText.DisplayDefinition(sense.Definition), sense.SenseId))
+            foreach (var c in moved)
             {
-                if (c.Target == sense.Word) continue;
+                if (c.Target == sense.Word || !IsCandidate(c.Target)) continue;
                 if (selection != null && !selection.Contains(c.Target)) continue;
                 if (seen.Add(c.Target)) list.Add(c);
             }
@@ -173,19 +156,22 @@ namespace WordRoom.Shelf
         /// <summary>The link words of every candidate room, once (they do not depend on the goal).</summary>
         void Build(CancellationToken cancel)
         {
-            var end = Math.Min(limit, d.WordCount);
             var targets = new HashSet<int>();
-            for (var rank = 0; rank < end; rank++)
+            foreach (var rank in rooms)
             {
                 cancel.ThrowIfCancellationRequested();
-                if (!IsCandidateRank(rank)) continue;
                 targets.Clear();
-                foreach (var row in d.GetSenseRows(rank))
-                    foreach (var c in CandidateLinks(d.GetSense(row)))
-                        targets.Add(CandidateRank(c.Target));
+                foreach (var group in EntryGroups(rank))
+                    for (var i = 0; i < group.Count; i++)
+                    {
+                        var row = group[i];
+                        var number = group.Count > 1 ? i + 1 : 0;
+                        var links = linksBySense[row] = PrepareLinks(d.GetSense(row), number, group.Count);
+                        if (links == null) continue;
+                        foreach (var link in links) targets.Add(CandidateRank(link.Target));
+                    }
                 exitsOf[rank] = new List<int>(targets);
                 foreach (var t in targets) (linkedFrom[t] ??= new List<int>()).Add(rank);
-                rooms.Add(rank);
             }
             // Every link word is a candidate, so it is one of the rooms above.
         }
@@ -273,7 +259,8 @@ namespace WordRoom.Shelf
             goal = start = null;
             moves = -1;
             tried = 0;
-            var order = new List<int>(rooms);
+            var order = rooms.FindAll(rank => d.GetWordLength(rank) >= challengeMinLength);
+            var starts = new List<int>();
             for (var i = order.Count - 1; i > 0; i--)
             {
                 var j = random.Next(i + 1);
@@ -286,10 +273,11 @@ namespace WordRoom.Shelf
                 if (linkedFrom[g] == null) continue;          // no room links it at all
                 SetGoal(g);
                 // `reaching` is in breadth-first order, so distances never decrease: the far rooms are its tail.
-                var first = reaching.Count;
-                while (first > 0 && distance[reaching[first - 1]] >= minMoves) first--;
-                if (first == reaching.Count) continue;
-                var pick = reaching[first + random.Next(reaching.Count - first)];
+                starts.Clear();
+                for (var i = reaching.Count - 1; i >= 0 && distance[reaching[i]] >= minMoves; i--)
+                    if (d.GetWordLength(reaching[i]) >= challengeMinLength) starts.Add(reaching[i]);
+                if (starts.Count == 0) continue;
+                var pick = starts[random.Next(starts.Count)];
                 goal = d.GetWord(g);
                 start = d.GetWord(pick);
                 moves = distance[pick];
@@ -306,6 +294,13 @@ namespace WordRoom.Shelf
             return rank >= 0 && valid[rank];
         }
 
+        public bool CanTravel(string from, string to)
+        {
+            var source = CandidateRank(from);
+            var target = CandidateRank(to);
+            return source >= 0 && valid[source] && target >= 0 && valid[target] && exitsOf[source].Contains(target);
+        }
+
         /// <summary>
         /// Headwords of the room's exits that lead to a valid room for the current goal: the connections the graph's
         /// distances use. Equal to the link targets of Doors over the room's senses (the reading screen's links).
@@ -320,11 +315,16 @@ namespace WordRoom.Shelf
             return set;
         }
 
-        /// <summary>The links of a sense (offsets in its display definition): its candidate links that lead to a valid room, first place each.</summary>
+        public string ReadingDefinition(int row) => readingDefinitions[row];
+
+        /// <summary>The final links of a sense, at offsets in ReadingDefinition.</summary>
         public List<ShelfTextPart> Doors(int row)
         {
-            var links = CandidateLinks(d.GetSense(row));
-            links.RemoveAll(c => !IsValidDoor(c.Target));
+            var links = new List<ShelfTextPart>();
+            var prepared = linksBySense[row];
+            if (prepared != null)
+                foreach (var link in prepared)
+                    if (IsValidDoor(link.Target)) links.Add(link);
             return links;
         }
 

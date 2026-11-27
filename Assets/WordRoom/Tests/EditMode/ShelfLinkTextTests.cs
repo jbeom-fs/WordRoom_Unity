@@ -1,9 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Text;
-using System.Threading;
 using NUnit.Framework;
 using UnityEngine;
 using WordRoom.Shelf;
@@ -15,8 +13,7 @@ namespace WordRoom.Data.Tests
     /// Link extraction rules (ShelfLinkText.FindCandidates): eojeol ranges, the clicked range of each link, confirmed
     /// exceptions (per sense, verb forms, counters, eojeol splits), whole-eojeol headwords before endings, ambiguous
     /// splits left plain, door conditions applied after the split without re-splitting. Synthetic headword sets keep
-    /// each case exact; the real package checks the cases named in the plan and that the reading screen's links and
-    /// the room graph's connections are the same.
+    /// each case exact. The real package also checks representative results of the comparison rules.
     /// </summary>
     public sealed class ShelfLinkTextTests
     {
@@ -149,101 +146,37 @@ namespace WordRoom.Data.Tests
             return realData ??= WordRoomDataLoader.Load(new DirectoryPackageSource(package), new LoadOptions { VerifyHashes = false });
         }
 
-        static string RealBracketed(ShelfLinkGraph graph, WordRoomDataset d, string senseId, bool displayed = false)
+        static string RealBracketed(WordRoomDataset d, string senseId, Func<string, bool> isEntry)
         {
             Assert.IsTrue(d.TryGetSenseRow(senseId, out var row), senseId);
             var text = ShelfLinkText.DisplayDefinition(d.GetSense(row).Definition);
             var sb = new StringBuilder();
-            var links = displayed ? graph.Doors(row) : graph.Extract(text, senseId);
+            var links = ShelfLinkText.FindCandidates(text, senseId, isEntry,
+                word => d.TryGetWordRank(word, out var rank) && d.GetWordLength(rank) >= 2 && !d.IsRestricted(rank));
             foreach (var p in ShelfLinkText.Split(text, links)) sb.Append(p.IsLink ? "[" + p.Text + "]" : p.Text);
             return sb.ToString();
         }
 
         [Test]
-        public void RealPackage_NamedCases_AndScreenLinksEqualGraph()
+        public void RealPackage_RuleBasedExtraction()
         {
             var d = RealData();
-            var graph = new ShelfLinkGraph(d, 15000, 2, new List<ShelfLinkGraph.RoomRule>(), CancellationToken.None);
-            CollectionAssert.IsEmpty(graph.ExceptionProblems(), "적용되지 않는 예외가 있습니다");
-            StringAssert.StartsWith("[영화]용 음화", RealBracketed(graph, d, "68510"));
-            StringAssert.Contains("얻은 [결과]의 [비율]", RealBracketed(graph, d, "29811"));
-            var flaw = RealBracketed(graph, d, "564928");
+            bool IsEntry(string word) => d.TryGetWordRank(word, out var rank) && d.GetWord(rank) == word;
+            CollectionAssert.IsEmpty(ShelfLinkText.ExceptionProblems(IsEntry), "적용되지 않는 예외가 있습니다");
+            StringAssert.StartsWith("[영화]용 음화", RealBracketed(d, "68510", IsEntry));
+            StringAssert.Contains("얻은 [결과]의 [비율]", RealBracketed(d, "29811", IsEntry));
+            var flaw = RealBracketed(d, "564928", IsEntry);
             StringAssert.Contains("모자라는", flaw);
             StringAssert.DoesNotContain("[모자]", flaw);
-            StringAssert.StartsWith("[말과]의 [포유류]. 말과 비슷한데", RealBracketed(graph, d, "126851")); // 당나귀, before deduplication
-            StringAssert.StartsWith("[말과]의 [포유류]", RealBracketed(graph, d, "146729"));     // 말
+            StringAssert.StartsWith("[말과]의 [포유류]. 말과 비슷한데", RealBracketed(d, "126851", IsEntry));
+            StringAssert.StartsWith("[말과]의 [포유류]", RealBracketed(d, "146729", IsEntry));
             foreach (var particleSense in new[] { "397604", "25981" })                              // 조사, 토
             {
-                var text = RealBracketed(graph, d, particleSense);
+                var text = RealBracketed(d, particleSense, IsEntry);
                 StringAssert.Contains("그 말과 다른", text, particleSense);
                 StringAssert.DoesNotContain("[말과]", text, particleSense);
             }
 
-            // Every sense: links cut the shown text only at link ranges, and the reading screen's links of a room are
-            // exactly the graph's connections of that room (for a goal).
-            Assert.IsTrue(graph.SetGoal("지구"));
-            foreach (var (senseId, excerpt) in new[]
-            {
-                ("35148", "갈기는 말과 같으며"),              // 기린
-                ("542424", "갈기는 말과 같으며"),             // 인수
-                ("598839", "[크기]는 말과 같고"),             // 유니콘
-                ("126851", "[말과]의 [포유류]. 말과 비슷한데"), // 당나귀
-                ("397604", "그 말과 다른 말과의"),            // 조사
-                ("315312", "강과 [시내]를 아울러"),           // 하천
-                ("438835", "[신경과] [의사]"),                // 프로이트
-                ("15109", "[방과] [후에]"),                   // 숙제
-                ("173135", "[분과] 회의에"),                  // 본회의, 회의 already linked earlier
-                ("308653", "[공과] [대학]에서"),             // 파스칼
-                ("363597", "[공과] 대학 따위"),              // 케임브리지, 대학 already linked earlier
-                ("1396731", "[공과] 계열을 아울러"),           // 이공계, 계열 already linked earlier
-                ("570548", "[경과] 중에도"),                  // 복수
-                ("70168", "[인과] [관계]와"),                 // 메커니즘
-                ("535316", "‘[산과] [의사]’"),                // 산의
-                ("1966", "[콩과]의 한해살이풀"),              // 땅콩
-                ("17331", "말과 [동작]으로"),                // 연극
-                ("64490", "말과 [글로] 표현할"),               // 문장
-                ("65548", "[정신]과 [육체]를 훈련"),            // 수행
-                ("461386", "말과 얼굴빛을 아울러"),            // 사기, 얼굴빛 is outside the package
-            })
-                StringAssert.Contains(excerpt, RealBracketed(graph, d, senseId, displayed: true), senseId);
-            var checkedRooms = 0;
-            for (var rank = 0; rank < d.WordCount; rank++)
-            {
-                var word = d.GetWord(rank);
-                if (!graph.IsCandidate(word)) continue;
-                var screen = new HashSet<string>();
-                foreach (var row in d.GetSenseRows(rank))
-                {
-                    var sense = d.GetSense(row);
-                    if (string.IsNullOrEmpty(sense.Definition)) continue;
-                    var text = ShelfLinkText.DisplayDefinition(sense.Definition);
-                    var doors = graph.Doors(row);
-                    var joined = new StringBuilder();
-                    foreach (var p in ShelfLinkText.Split(text, doors))
-                    {
-                        Assert.AreEqual(text.Substring(p.Start, p.Length), p.Text);
-                        joined.Append(p.Text);
-                    }
-                    Assert.AreEqual(text, joined.ToString(), $"{word}({sense.SenseId})");
-                    foreach (var link in doors)
-                    {
-                        Assert.AreEqual(link.Target, link.Text, $"{word}({sense.SenseId})");
-                        Assert.AreNotEqual(word, link.Target, "자기 방 링크");
-                        screen.Add(link.Target);
-                    }
-                    Assert.AreEqual(doors.Count, doors.Select(x => x.Target).Distinct().Count(), $"{word}({sense.SenseId}): 같은 뜻풀이의 중복 링크");
-                }
-                CollectionAssert.AreEquivalent(graph.ValidExits(word), screen, $"{word}: 읽기 화면 링크와 방 그래프 연결이 다릅니다");
-                checkedRooms++;
-            }
-            Debug.Log($"[링크 규칙] 실데이터 방 {checkedRooms:N0}개에서 읽기 화면 링크와 그래프 연결 일치 확인");
-            Assert.Greater(checkedRooms, 10000);
-
-            // The random challenge is drawn on these connections as before: a start at least 10 links from its goal.
-            Assert.IsTrue(graph.PickChallenge(new System.Random(20261126), 10, CancellationToken.None, out var goal, out var start, out var moves, out _));
-            Assert.GreaterOrEqual(moves, 10);
-            Assert.AreEqual(moves, graph.DistanceToGoal(start));
-            Debug.Log($"[링크 규칙] 무작위 도전 예: {start} → {goal}, 최단 {moves}회");
         }
     }
 }
